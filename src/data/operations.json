@@ -1,0 +1,66 @@
+{
+  "manualStatus": "force_open",
+  "manualStatusNote": "",
+  "updatedAt": "2026-11-06T05:32:34.670Z",
+  "daysDisplay": "Open All 7 Days",
+  "hoursDisplay": "Mon–Thu, Sat–Sun: 2:00 PM – 11:30 PM | Fri: 1:00 PM – 11:00 PM",
+  "shortHoursDisplay": "Mon–Thu, Sat–Sun: 2–11:30 PM • Fri: 1–11 PM",
+  "kitchenClosesDisplay": "Last Kitchen Order: 30 minutes before closing",
+  "regularOpenHour24": 14,
+  "regularCloseHour24": 23.5,
+  "fridayOpenHour24": 13,
+  "fridayCloseHour24": 23,
+  "schedule": [
+    {
+      "close": "11:30 PM",
+      "day": "Monday",
+      "isOpen": true,
+      "open": "2:00 PM"
+    },
+    {
+      "close": "11:30 PM",
+      "day": "Tuesday",
+      "isOpen": true,
+      "open": "2:00 PM"
+    },
+    {
+      "close": "11:30 PM",
+      "day": "Wednesday",
+      "isOpen": true,
+      "open": "2:00 PM"
+    },
+    {
+      "close": "11:30 PM",
+      "day": "Thursday",
+      "isOpen": true,
+      "open": "2:00 PM"
+    },
+    {
+      "close": "11:00 PM",
+      "day": "Friday",
+      "isOpen": true,
+      "open": "1:00 PM"
+    },
+    {
+      "close": "11:30 PM",
+      "day": "Saturday",
+      "isOpen": true,
+      "open": "2:00 PM"
+    },
+    {
+      "close": "11:30 PM",
+      "day": "Sunday",
+      "isOpen": true,
+      "open": "2:00 PM"
+    }
+  ],
+  "closureNotice": {
+    "enabled": false,
+    "title": "Special Notice",
+    "message": "We will be closed on 6th and 7th October, due to unavoidable circumstances.",
+    "startDate": "2026-10-06",
+    "endDate": "2026-10-07",
+    "reason": "Special Notice"
+  },
+  "updatedBy": "Admin Portal"
+}

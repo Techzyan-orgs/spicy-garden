@@ -1,0 +1,636 @@
+{
+  "restaurant_info": {
+    "name": "THE SPICY GARDEN",
+    "subtitle": "CAFE & BISTRO",
+    "header": "MENU",
+    "tagline": "Good Food. Good Mood.",
+    "footer": "THANK YOU! VISIT AGAIN."
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "source_image": "unnamed (2).png",
+      "visual_metadata": {
+        "theme": "Dark chalkboard/slate textured background with warm accent banners",
+        "header_elements": {
+          "top_left_food_image": "Chilli Chicken / Manchurian dish in a dark bowl with green garnish",
+          "top_right_food_image": "Noodles with bell peppers and vegetables in a dark bowl",
+          "header_logo_details": "Red chilli icon above 'THE SPICY GARDEN', ornate scroll banner for 'MENU'"
+        },
+        "middle_elements": {
+          "right_food_image": "Fried rice bowl with spring onion garnish"
+        },
+        "bottom_elements": {
+          "left_food_image": "Bowl of stir-fried noodles with veggies",
+          "right_food_image": "Stack of Laccha Parathas on a plate with red dip/chutney",
+          "footer_embellishments": "Flourishes, leaves, and heart icons around 'Good Food. Good Mood.'"
+        }
+      },
+      "sections": [
+        {
+          "name": "MAIN COURSE",
+          "banner_color": "Brownish-red",
+          "icon": "Chef hat / cloche illustration",
+          "columns": [
+            "MUSHROOM",
+            "PANEER",
+            "FISH",
+            "PRAWN",
+            "CHICKEN"
+          ],
+          "column_banner_colors": {
+            "MUSHROOM": "Green",
+            "PANEER": "Orange-brown",
+            "FISH": "Blue",
+            "PRAWN": "Orange",
+            "CHICKEN": "Olive green"
+          },
+          "items": [
+            {
+              "name": "CHILLI",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 169,
+                "PANEER": 179,
+                "FISH": 239,
+                "PRAWN": 259,
+                "CHICKEN": 199
+              }
+            },
+            {
+              "name": "MANCHURIAN",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 179,
+                "PANEER": 189,
+                "FISH": 249,
+                "PRAWN": 269,
+                "CHICKEN": 209
+              }
+            },
+            {
+              "name": "SCHEZWAN",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 179,
+                "PANEER": 189,
+                "FISH": 249,
+                "PRAWN": 269,
+                "CHICKEN": 209
+              }
+            },
+            {
+              "name": "SWEET AND SOUR",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 179,
+                "PANEER": 189,
+                "FISH": 249,
+                "PRAWN": 269,
+                "CHICKEN": 209
+              }
+            },
+            {
+              "name": "HOT GARLIC",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 189,
+                "PANEER": 199,
+                "FISH": 259,
+                "PRAWN": 279,
+                "CHICKEN": 219
+              }
+            },
+            {
+              "name": "KUNG PAO",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 199,
+                "PANEER": 209,
+                "FISH": 269,
+                "PRAWN": 289,
+                "CHICKEN": 229
+              }
+            },
+            {
+              "name": "CHILLI LEMON",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 199,
+                "PANEER": 209,
+                "FISH": 269,
+                "PRAWN": 289,
+                "CHICKEN": 229
+              }
+            },
+            {
+              "name": "SWEET GARLIC",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 199,
+                "PANEER": 209,
+                "FISH": 269,
+                "PRAWN": 289,
+                "CHICKEN": 229
+              }
+            },
+            {
+              "name": "OYSTER",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 209,
+                "PANEER": 219,
+                "FISH": 279,
+                "PRAWN": 299,
+                "CHICKEN": 239
+              }
+            },
+            {
+              "name": "GREEN PEPPER",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 209,
+                "PANEER": 219,
+                "FISH": 279,
+                "PRAWN": 299,
+                "CHICKEN": 239
+              }
+            },
+            {
+              "name": "BLACK PEPPER",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 209,
+                "PANEER": 219,
+                "FISH": 279,
+                "PRAWN": 299,
+                "CHICKEN": 239
+              }
+            },
+            {
+              "name": "SAMBAL",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 209,
+                "PANEER": 219,
+                "FISH": 279,
+                "PRAWN": 299,
+                "CHICKEN": 239
+              }
+            },
+            {
+              "name": "HONEY",
+              "portion": "8 PCS",
+              "prices": {
+                "MUSHROOM": 209,
+                "PANEER": 219,
+                "FISH": 279,
+                "PRAWN": 299,
+                "CHICKEN": 239
+              }
+            }
+          ]
+        },
+        {
+          "name": "RICE",
+          "banner_color": "Forest green",
+          "icon": "Rice bowl with steam line art",
+          "columns": [
+            "VEG",
+            "EGG",
+            "CHICKEN",
+            "EGG CHICKEN",
+            "MIX"
+          ],
+          "column_banner_colors": {
+            "VEG": "Olive green",
+            "EGG": "Olive green",
+            "CHICKEN": "Olive green",
+            "EGG CHICKEN": "Olive green",
+            "MIX": "Olive green"
+          },
+          "items": [
+            {
+              "name": "FRIED RICE",
+              "prices": {
+                "VEG": 119,
+                "EGG": 129,
+                "CHICKEN": 149,
+                "EGG CHICKEN": 159,
+                "MIX": 189
+              }
+            },
+            {
+              "name": "SCHEZWAN RICE",
+              "prices": {
+                "VEG": 129,
+                "EGG": 139,
+                "CHICKEN": 159,
+                "EGG CHICKEN": 169,
+                "MIX": 199
+              }
+            },
+            {
+              "name": "LEMON CORIANDER RICE",
+              "prices": {
+                "VEG": 129,
+                "EGG": 139,
+                "CHICKEN": 159,
+                "EGG CHICKEN": 169,
+                "MIX": 199
+              }
+            },
+            {
+              "name": "CHILLI GARLIC RICE",
+              "prices": {
+                "VEG": 129,
+                "EGG": 139,
+                "CHICKEN": 159,
+                "EGG CHICKEN": 169,
+                "MIX": 199
+              }
+            },
+            {
+              "name": "LEMON GRASS RICE",
+              "prices": {
+                "VEG": 139,
+                "EGG": 149,
+                "CHICKEN": 169,
+                "EGG CHICKEN": 179,
+                "MIX": 209
+              }
+            },
+            {
+              "name": "SINGAPORE RICE",
+              "prices": {
+                "VEG": 139,
+                "EGG": 149,
+                "CHICKEN": 169,
+                "EGG CHICKEN": 179,
+                "MIX": 209
+              }
+            },
+            {
+              "name": "HONG KONG RICE",
+              "prices": {
+                "VEG": 139,
+                "EGG": 149,
+                "CHICKEN": 169,
+                "EGG CHICKEN": 179,
+                "MIX": 209
+              }
+            },
+            {
+              "name": "BURNT GARLIC RICE",
+              "prices": {
+                "VEG": 139,
+                "EGG": 149,
+                "CHICKEN": 169,
+                "EGG CHICKEN": 179,
+                "MIX": 209
+              }
+            },
+            {
+              "name": "MANCHURIAN RICE",
+              "prices": {
+                "VEG": 149,
+                "EGG": 159,
+                "CHICKEN": 179,
+                "EGG CHICKEN": 189,
+                "MIX": 229
+              }
+            }
+          ]
+        },
+        {
+          "name": "NOODLES",
+          "banner_color": "Rusty orange-brown",
+          "icon": "Noodle bowl with chopsticks line art",
+          "columns": [
+            "VEG",
+            "EGG",
+            "CHICKEN",
+            "EGG CHICKEN",
+            "MIX"
+          ],
+          "column_banner_colors": {
+            "VEG": "Brownish-orange",
+            "EGG": "Brownish-orange",
+            "CHICKEN": "Brownish-orange",
+            "EGG CHICKEN": "Brownish-orange",
+            "MIX": "Brownish-orange"
+          },
+          "items": [
+            {
+              "name": "HAKKA NOODLES",
+              "prices": {
+                "VEG": 89,
+                "EGG": 99,
+                "CHICKEN": 129,
+                "EGG CHICKEN": 139,
+                "MIX": 179
+              }
+            },
+            {
+              "name": "GRAVY NOODLES",
+              "prices": {
+                "VEG": 99,
+                "EGG": 109,
+                "CHICKEN": 139,
+                "EGG CHICKEN": 149,
+                "MIX": 189
+              }
+            },
+            {
+              "name": "SINGAPORE NOODLES",
+              "prices": {
+                "VEG": 99,
+                "EGG": 109,
+                "CHICKEN": 139,
+                "EGG CHICKEN": 149,
+                "MIX": 189
+              }
+            },
+            {
+              "name": "SCHEZWAN NOODLES",
+              "prices": {
+                "VEG": 99,
+                "EGG": 109,
+                "CHICKEN": 139,
+                "EGG CHICKEN": 149,
+                "MIX": 189
+              }
+            },
+            {
+              "name": "CHILLI GARLIC NOODLES",
+              "prices": {
+                "VEG": 99,
+                "EGG": 109,
+                "CHICKEN": 139,
+                "EGG CHICKEN": 149,
+                "MIX": 189
+              }
+            },
+            {
+              "name": "HONG KONG NOODLES",
+              "prices": {
+                "VEG": 99,
+                "EGG": 109,
+                "CHICKEN": 139,
+                "EGG CHICKEN": 149,
+                "MIX": 189
+              }
+            },
+            {
+              "name": "CANTONESE NOODLES",
+              "prices": {
+                "VEG": 109,
+                "EGG": null,
+                "CHICKEN": 149,
+                "EGG CHICKEN": null,
+                "MIX": null
+              }
+            },
+            {
+              "name": "CORIANDER NOODLES",
+              "prices": {
+                "VEG": 119,
+                "EGG": 129,
+                "CHICKEN": 159,
+                "EGG CHICKEN": 169,
+                "MIX": 219
+              }
+            }
+          ]
+        },
+        {
+          "name": "PARATHA",
+          "banner_color": "Dark teal/slate blue",
+          "icon": "Paratha / flatbread line art",
+          "items": [
+            {
+              "name": "LACCHA PARATHA",
+              "price": 29
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page_number": 2,
+      "source_image": "unnamed (3).webp",
+      "visual_metadata": {
+        "theme": "Dark chalkboard/slate textured background with warm accent banners",
+        "header_elements": {
+          "top_left_food_image": "Cup of latte art coffee with coffee beans scattered around saucer",
+          "top_right_food_image": "Chocolate milkshake with whipped cream, chocolate drizzle, and cookies in a tall glass, chocolate squares on side",
+          "header_logo_details": "Title 'THE SPICY GARDEN', subtitle 'CAFE & BISTRO', ornate banner 'MENU' with decorative laurel leaf flourishes"
+        },
+        "middle_elements": {
+          "coffee_beans_graphic": "Scattered coffee beans under Tea & Coffee section",
+          "right_food_image": "Strawberry shake topped with whipped cream and diced strawberries, garnished with fresh strawberry"
+        },
+        "bottom_elements": {
+          "left_food_image": "Glass of Mango Lassi topped with mango cubes and mint leaf, diced fresh mango on the side",
+          "right_food_image": "Glass of Mojito / lime drink packed with ice, mint leaves, and lime slices, fresh lime half beside it",
+          "footer_embellishments": "Decorative heart and cursive lettering for 'Good Food. Good Mood.', floral branches flanking 'THANK YOU! VISIT AGAIN.'"
+        }
+      },
+      "sections": [
+        {
+          "name": "TEA & COFFEE",
+          "banner_color": "Warm terracotta/brown",
+          "icon": "Hot teacup with saucer and steam line art",
+          "items": [
+            {
+              "name": "HOT COFFEE",
+              "price": 59
+            },
+            {
+              "name": "BLACK COFFEE",
+              "price": 49
+            },
+            {
+              "name": "HOT CHOCOLATE COFFEE",
+              "price": 79
+            },
+            {
+              "name": "COLD COFFEE",
+              "price": 99
+            },
+            {
+              "name": "COLD COFFEE WITH ICE CREAM",
+              "price": 119
+            },
+            {
+              "name": "HOT CHOCOLATE",
+              "price": 69
+            }
+          ]
+        },
+        {
+          "name": "MILK SHAKE",
+          "banner_color": "Burgundy/deep rose",
+          "icon": "Milkshake cup with straw line art",
+          "items": [
+            {
+              "name": "MANGO SHAKE",
+              "price": 89
+            },
+            {
+              "name": "STRAWBERRY SHAKE",
+              "price": 89
+            },
+            {
+              "name": "PINEAPPLE SHAKE",
+              "price": 89
+            },
+            {
+              "name": "ORANGE SHAKE",
+              "price": 89
+            },
+            {
+              "name": "CHOCOLATE SHAKE",
+              "price": 99
+            },
+            {
+              "name": "BLACKCURRANT SHAKE",
+              "price": 99
+            },
+            {
+              "name": "BUTTERSCOTCH SHAKE",
+              "price": 99
+            },
+            {
+              "name": "KIWI SHAKE",
+              "price": 99
+            },
+            {
+              "name": "DARK CHOCOLATE SHAKE",
+              "price": 109
+            },
+            {
+              "name": "KITKAT SHAKE",
+              "price": 109
+            },
+            {
+              "name": "OREO SHAKE",
+              "price": 109
+            },
+            {
+              "name": "BLUEBERRY SHAKE",
+              "price": 129
+            },
+            {
+              "name": "KESAR BADAM SHAKE",
+              "price": 129
+            }
+          ],
+          "add_on": {
+            "name": "(ADD EXTRA ICECREAM)",
+            "price": 20
+          }
+        },
+        {
+          "name": "LASSI",
+          "banner_color": "Olive / moss green",
+          "icon": "Tall drink glass with straw line art",
+          "items": [
+            {
+              "name": "PLAIN LASSI",
+              "price": 69
+            },
+            {
+              "name": "MANGO LASSI",
+              "price": 99
+            },
+            {
+              "name": "STRAWBERRY LASSI",
+              "price": 99
+            },
+            {
+              "name": "PINEAPPLE LASSI",
+              "price": 99
+            },
+            {
+              "name": "ROSE LASSI",
+              "price": 99
+            },
+            {
+              "name": "BUTTERSCOTCH LASSI",
+              "price": 99
+            },
+            {
+              "name": "KESAR BADAM LASSI",
+              "price": 109
+            },
+            {
+              "name": "CHOCOLATE LASSI",
+              "price": 109
+            }
+          ]
+        },
+        {
+          "name": "BEVERAGES",
+          "banner_color": "Muted blue / denim",
+          "icon": "Mason jar drink with lemon slice and straw line art",
+          "items": [
+            {
+              "name": "PACKAGED WATER",
+              "price": "10/20",
+              "variants": {
+                "small": 10,
+                "large": 20
+              }
+            },
+            {
+              "name": "COKE",
+              "price": 49
+            },
+            {
+              "name": "FRESH LIME SODA",
+              "price": 59
+            },
+            {
+              "name": "MASALA COKE",
+              "price": 69
+            },
+            {
+              "name": "SODA SIKANJI",
+              "price": 69
+            },
+            {
+              "name": "VIRGIN MOJITO",
+              "price": 89
+            },
+            {
+              "name": "ORANGE MOJITO",
+              "price": 99
+            },
+            {
+              "name": "BLUE BOLSSOM",
+              "price": 99,
+              "spelling_note_in_menu": "BLUE BOLSSOM"
+            },
+            {
+              "name": "MANGO BLAST",
+              "price": 99
+            },
+            {
+              "name": "VIRGIN KIWI MARGARITA",
+              "price": 99
+            },
+            {
+              "name": "WATERMELON MOJITO",
+              "price": 109
+            },
+            {
+              "name": "GREEN APPLE MOJITO",
+              "price": 119
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
