@@ -282,3 +282,22 @@ export async function deleteFirebaseData(path: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Strict read: returns null ONLY when the node does not exist.
+ * Throws when Firebase is unconfigured, unreachable or returns an error, so
+ * callers can fail closed instead of mistaking an outage for "no data".
+ */
+export async function getFirebaseDataStrict<T>(path: string): Promise<T | null> {
+  if (!isFirebaseConfigured()) {
+    throw new Error('Firebase Realtime Database is not configured.');
+  }
+  const req = await prepareFirebaseRequest(path);
+  if (!req) throw new Error('Firebase Realtime Database URL is not configured.');
+
+  const res = await fetch(req.url, { method: 'GET', headers: req.headers, cache: 'no-store' });
+  if (!res.ok) {
+    throw new Error(`Firebase GET ${path} failed with HTTP ${res.status}`);
+  }
+  return (await res.json()) as T | null;
+}

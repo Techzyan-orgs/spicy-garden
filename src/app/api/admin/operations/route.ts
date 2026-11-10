@@ -5,15 +5,12 @@ import {
   getLiveOperationalStatus,
 } from '@/lib/operationsStore';
 import { OperationsData } from '@/types/operations';
-import { verifyOwnerSessionToken, OWNER_SESSION_COOKIE } from '@/lib/auth';
+import { isAdminRequest } from '@/lib/authServer';
 import { isFirebaseConfigured } from '@/lib/firebaseRtdb';
 
 export const dynamic = 'force-dynamic';
 
-async function checkAdminAuth(req: NextRequest): Promise<boolean> {
-  const token = req.cookies.get(OWNER_SESSION_COOKIE)?.value;
-  return await verifyOwnerSessionToken(token);
-}
+const checkAdminAuth = isAdminRequest;
 
 export async function GET(req: NextRequest) {
   if (!(await checkAdminAuth(req))) {

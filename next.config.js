@@ -1,3 +1,15 @@
+// Fail production builds when required public config is missing. NEXT_PUBLIC_* values
+// are inlined into the client bundle at build time, so they cannot be fixed at runtime.
+// ( is not affected; the UI disables UPI payment when it is absent.)
+if (process.env.NODE_ENV === 'production' && process.argv.includes('build')) {
+  const upiId = (process.env.NEXT_PUBLIC_RESTAURANT_UPI_ID || '').trim();
+  if (!/^[a-zA-Z0-9._-]{2,256}@[a-zA-Z][a-zA-Z0-9.-]{1,64}$/.test(upiId)) {
+    throw new Error(
+      'NEXT_PUBLIC_RESTAURANT_UPI_ID is missing or not a valid UPI VPA (e.g. name@bank). Set it before building.'
+    );
+  }
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,

@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { verifyOwnerSessionToken, OWNER_SESSION_COOKIE } from '@/lib/auth';
+import { isAdminRequest } from '@/lib/authServer';
 import { uploadImageToCloudinary, isCloudinaryConfigured } from '@/lib/cloudinary';
 
 export const dynamic = 'force-dynamic';
 
-async function checkAdminAuth(req: NextRequest): Promise<boolean> {
-  const token = req.cookies.get(OWNER_SESSION_COOKIE)?.value;
-  return await verifyOwnerSessionToken(token);
-}
+const checkAdminAuth = isAdminRequest;
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 

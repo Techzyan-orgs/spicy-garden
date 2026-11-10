@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  verifyOwnerCredentials,
-  createOwnerSessionToken,
-  OWNER_SESSION_COOKIE,
-} from '@/lib/auth';
+import { createOwnerSessionToken, OWNER_SESSION_COOKIE, SESSION_TTL_SECONDS } from '@/lib/auth';
+import { verifyOwnerCredentials, getSessionVersion } from '@/lib/authServer';
+import { ConfigError } from '@/lib/env';
+
+export const runtime = 'nodejs';
 
 import crypto from 'crypto';
 import {
@@ -142,7 +142,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Unified verification in constant time (prevents account enumeration)
-    const isValid = await verifyOwnerCredentials(trimmedEmail, password);
+    const isValid = typeof password === 'string' && verifyOwnerCredentials(trimmedEmail, password);
     if (!isValid) {
       await recordFailedAttempt(ip);
       return NextResponse.json(
@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
     // Clear failed attempts on successful login
     await clearFailedAttempts(ip);
 
-    const token = await createOwnerSessionToken();
+    const token = await createOwnerSessionToken(await getSessionVersion());
 
     const response = NextResponse.json({
       success: true,
@@ -166,13 +166,20 @@ export async function POST(req: NextRequest) {
       value: token,
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: 'strict',
       path: '/',
-      maxAge: 60 * 60 * 24, // 24 hours
+      maxAge: SESSION_TTL_SECONDS,
     });
 
     return response;
   } catch (err: any) {
+    if (err instanceof ConfigError) {
+      console.error('[Admin Login API] Server misconfiguration:', err.message);
+      return NextResponse.json(
+        { error: 'Owner login is not available: server is misconfigured.' },
+        { status: 503 }
+      );
+    }
     console.error('[Admin Login API] Error:', err);
     return NextResponse.json(
       { error: 'An unexpected error occurred during login.' },

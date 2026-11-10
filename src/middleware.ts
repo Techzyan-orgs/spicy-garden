@@ -10,7 +10,17 @@ export async function middleware(req: NextRequest) {
   }
 
   const token = req.cookies.get(OWNER_SESSION_COOKIE)?.value;
-  const isAuthenticated = await verifyOwnerSessionToken(token);
+  let isAuthenticated = false;
+  try {
+    isAuthenticated = await verifyOwnerSessionToken(token);
+  } catch (err) {
+    // Misconfigured secrets: fail closed, never treat as authenticated.
+    console.error('[Middleware] Owner auth unavailable:', err instanceof Error ? err.message : err);
+    return NextResponse.json(
+      { error: 'Owner portal unavailable: server is misconfigured.' },
+      { status: 503 }
+    );
+  }
 
   // Guard API routes
   if (pathname.startsWith('/api/admin') || pathname.startsWith('/api/ably')) {

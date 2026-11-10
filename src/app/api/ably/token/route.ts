@@ -1,13 +1,12 @@
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyOwnerSessionToken, OWNER_SESSION_COOKIE } from '@/lib/auth';
+import { isAdminRequest } from '@/lib/authServer';
 import { generateAblyToken } from '@/lib/ably';
 
 export async function GET(req: NextRequest) {
   // Protect Ably token generation - strictly accessible by authenticated owner
-  const token = req.cookies.get(OWNER_SESSION_COOKIE)?.value;
-  const isAuth = await verifyOwnerSessionToken(token);
+  const isAuth = await isAdminRequest(req);
   if (!isAuth) {
     return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
   }

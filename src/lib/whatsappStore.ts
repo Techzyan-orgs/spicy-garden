@@ -51,6 +51,14 @@ const SUBSCRIBERS_FILE_PATH = path.join(process.cwd(), 'src', 'data', 'whatsapp_
 let cachedSubscribers: StoredSubscriberRecord[] = [];
 let isStoreInitialized = false;
 
+function safeDecrypt(value: string): string {
+  try {
+    return decryptSensitiveData(value);
+  } catch {
+    return '';
+  }
+}
+
 function hashPhone(phone: string): string {
   const clean = phone.replace(/\D/g, '').slice(-10);
   return crypto.createHash('sha256').update(clean).digest('hex');
@@ -256,7 +264,7 @@ export async function addOrUpdateSubscriber(params: {
     id: targetRecord.id,
     phone: cleanPhone,
     formattedPhone: formatWhatsAppPhoneNumber(cleanPhone),
-    customerName: params.customerName?.trim() || (targetRecord.nameEncrypted ? decryptSensitiveData(targetRecord.nameEncrypted) : ''),
+    customerName: params.customerName?.trim() || (targetRecord.nameEncrypted ? safeDecrypt(targetRecord.nameEncrypted) : ''),
     source: targetRecord.source,
     interestScore: targetRecord.interestScore,
     consentGiven: true,

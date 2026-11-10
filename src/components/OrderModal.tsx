@@ -29,6 +29,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { generateQrDataUrl } from '@/lib/qrCode';
+import { RESTAURANT_UPI_ID, isUpiConfigured, buildUpiPaymentUrl } from '@/lib/publicConfig';
 import { useCafeOperations } from '@/context/CafeOperationsContext';
 
 interface OrderModalProps {
@@ -237,13 +238,15 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
     );
   };
 
-  const upiVpa = process.env.NEXT_PUBLIC_RESTAURANT_UPI_ID || '8777866602@upi';
-  const upiPayUrl = `upi://pay?pa=${upiVpa}&pn=The%20Spicy%20Garden&am=${totalPrice}&cu=INR&tn=Order%20${encodeURIComponent(
-    cartItems.length > 0 ? cartItems[0].name.slice(0, 15) : 'Meal'
-  )}`;
+  const upiVpa = RESTAURANT_UPI_ID;
+  const upiPayUrl = buildUpiPaymentUrl(
+    totalPrice,
+    `Order ${cartItems.length > 0 ? cartItems[0].name.slice(0, 15) : 'Meal'}`
+  );
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
 
   useEffect(() => {
+    if (!upiPayUrl) return;
     generateQrDataUrl(upiPayUrl, 160).then((dataUrl) => {
       if (dataUrl) setQrCodeUrl(dataUrl);
     });
@@ -1027,6 +1030,8 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
                   <button
                     type="button"
                     onClick={() => setPaymentMode('upi')}
+                    disabled={!isUpiConfigured}
+                    title={isUpiConfigured ? undefined : 'UPI payment is not available right now'}
                     className={`p-2 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                       paymentMode === 'upi'
                         ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 text-gray-900 dark:text-white shadow-sm ring-1 ring-emerald-500'

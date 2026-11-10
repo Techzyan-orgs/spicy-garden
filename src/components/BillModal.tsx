@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Printer, MessageCircle } from 'lucide-react';
 import { generateQrDataUrl } from '@/lib/qrCode';
+import { RESTAURANT_UPI_ID, isUpiConfigured, buildUpiPaymentUrl } from '@/lib/publicConfig';
 
 export interface BillOrderItem {
   itemId?: string;
@@ -104,8 +105,7 @@ export default function BillModal({ order, isOpen, onClose }: BillModalProps) {
   const orderNumStr = String(order.order_number).padStart(4, '0');
 
   // Direct UPI Payment Link & QR Code
-  const upiVpa = process.env.NEXT_PUBLIC_RESTAURANT_UPI_ID || '8777866602@upi';
-  const upiUrl = `upi://pay?pa=${upiVpa}&pn=The%20Spicy%20Garden&am=${grandTotal}&cu=INR&tn=Bill%20SG-${orderNumStr}`;
+  const upiUrl = buildUpiPaymentUrl(grandTotal, `Bill SG-${orderNumStr}`);
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
 
   useEffect(() => {
@@ -172,7 +172,7 @@ export default function BillModal({ order, isOpen, onClose }: BillModalProps) {
       `*Total Amount: ₹${grandTotal}*`,
       `Taxes: GST 5% Included (CGST ₹${halfGst} + SGST ₹${halfGst})`,
       `Payment: ${order.payment_status === 'paid' ? `PAID (${(order.payment_mode || 'UPI').toUpperCase()})` : 'UNPAID'}`,
-      `UPI Pay: 8777866602@upi`,
+      ...(isUpiConfigured ? [`UPI Pay: ${RESTAURANT_UPI_ID}`] : []),
       `Thank you for visiting The Spicy Garden!`,
     ];
     const text = encodeURIComponent(lines.join('\n'));
@@ -457,7 +457,7 @@ export default function BillModal({ order, isOpen, onClose }: BillModalProps) {
                   Receipt of settled bill. Thank you!
                 </p>
               </div>
-            ) : (
+            ) : isUpiConfigured && qrCodeUrl ? (
               <div className="flex flex-col items-center justify-center text-center space-y-1 py-1">
                 <div className="p-1 border border-black bg-white">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -472,7 +472,11 @@ export default function BillModal({ order, isOpen, onClose }: BillModalProps) {
                 <p className="text-[9px] font-bold uppercase tracking-wide">
                   SCAN WITH ANY UPI APP TO PAY
                 </p>
-                <p className="text-[8.5px]">UPI ID: 8777866602@upi</p>
+                <p className="text-[8.5px]">UPI ID: {RESTAURANT_UPI_ID}</p>
+              </div>
+            ) : (
+              <div className="my-2 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide">PAYMENT DUE AT COUNTER</p>
               </div>
             )}
 

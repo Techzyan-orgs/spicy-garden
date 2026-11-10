@@ -14,7 +14,7 @@ import {
 import { publishOrderToAbly, publishOrderAcknowledgedToAbly } from '@/lib/ably';
 import { sendWhatsAppTextMessage, isWhatsAppConfigured } from '@/lib/whatsapp';
 import { addOrUpdateSubscriber } from '@/lib/whatsappStore';
-import { verifyOwnerSessionToken, OWNER_SESSION_COOKIE } from '@/lib/auth';
+import { isAdminRequest } from '@/lib/authServer';
 import { readOperationsFromStore, calculateLiveOperationsStatus } from '@/lib/operationsStore';
 
 interface OrderItemInput {
@@ -62,10 +62,7 @@ function checkOrderRateLimit(ip: string): boolean {
   return record.count <= 15;
 }
 
-async function checkAdminAuth(req: NextRequest): Promise<boolean> {
-  const token = req.cookies.get(OWNER_SESSION_COOKIE)?.value;
-  return await verifyOwnerSessionToken(token);
-}
+const checkAdminAuth = isAdminRequest;
 
 export async function GET(req: NextRequest) {
   // Only authenticated owner/staff can read order list & customer PII
