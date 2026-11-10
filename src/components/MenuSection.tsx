@@ -263,7 +263,7 @@ function DishCard({
 }
 
 export default function MenuSection() {
-  const { categories, items } = useMenuData();
+  const { categories, items, isLoading: isMenuLoading, error: menuError, refetch: refetchMenu } = useMenuData();
   const { isCartOpen, closeCart, openCart, addItem } = useCart();
 
   const [activeCategory, setActiveCategory] = useState<string>("all");
@@ -589,6 +589,34 @@ export default function MenuSection() {
             </div>
 
           </div>
+
+          {/* Live menu loading / unavailable states (no built-in fallback menu) */}
+          {items.length === 0 && isMenuLoading && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" aria-busy="true" aria-label="Loading menu">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-28 rounded-2xl bg-gray-100 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 animate-pulse" />
+              ))}
+            </div>
+          )}
+          {items.length === 0 && !isMenuLoading && menuError && (
+            <div role="alert" className="p-5 rounded-2xl border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 text-center space-y-2">
+              <p className="font-bold text-amber-900 dark:text-amber-200">{menuError}</p>
+              <p className="text-xs text-amber-800/90 dark:text-amber-300/90">
+                We&apos;re retrying automatically. To order right now, call us at{" "}
+                <a href={RESTAURANT_DATA.contact.telLink} className="font-bold underline">
+                  {RESTAURANT_DATA.contact.displayPhone}
+                </a>
+                .
+              </p>
+              <button
+                type="button"
+                onClick={() => refetchMenu()}
+                className="mt-1 px-4 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white"
+              >
+                Try again
+              </button>
+            </div>
+          )}
 
           {/* Category Pills Slider */}
           <div className="flex items-center space-x-2 overflow-x-auto pb-2 scrollbar-none no-scrollbar">

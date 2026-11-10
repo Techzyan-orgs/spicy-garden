@@ -207,7 +207,7 @@ export default function Navbar({ onOpenBooking }: NavbarProps) {
               <span className={`w-2 h-2 rounded-full ${status.isOpen ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
               <span className="font-medium text-gray-800 dark:text-gray-200">{status.statusText}</span>
             </span>
-            <span className="text-gray-500 dark:text-gray-400">{status.nextStatusText}</span>
+            {status.nextStatusText && <span className="text-gray-500 dark:text-gray-400">{status.nextStatusText}</span>}
           </div>
 
           <div className="grid grid-cols-1 gap-1">

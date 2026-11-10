@@ -12,7 +12,7 @@ interface HeroProps {
 }
 
 export default function Hero({ onOpenBooking }: HeroProps) {
-  const { status, rawStatus } = useCafeOperations();
+  const { status, rawStatus, isStatusKnown } = useCafeOperations();
   const googleRating = useGoogleRating();
 
   return (
@@ -39,9 +39,9 @@ export default function Hero({ onOpenBooking }: HeroProps) {
               </span>
               
               <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-medium border bg-white/80 dark:bg-gray-900/80 border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-300 backdrop-blur-sm">
-                <span className={`w-2 h-2 rounded-full ${status.isOpen ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <span className={`w-2 h-2 rounded-full ${!isStatusKnown ? 'bg-gray-400' : status.isOpen ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                 <span className="font-semibold">{status.statusText}</span>
-                <span className="text-gray-400">• {status.nextStatusText}</span>
+                {status.nextStatusText && <span className="text-gray-400">• {status.nextStatusText}</span>}
               </div>
             </div>
 
@@ -124,10 +124,12 @@ export default function Hero({ onOpenBooking }: HeroProps) {
                 <span className="font-semibold text-gray-800 dark:text-gray-200">{RESTAURANT_DATA.stats.dishesServed}</span>
               </div>
 
-              <div className="flex items-center space-x-1.5">
-                <Clock className="w-4 h-4 text-garden-600 dark:text-garden-400" />
-                <span>{rawStatus?.operations?.shortHoursDisplay || RESTAURANT_DATA.timings.shortHoursDisplay}</span>
-              </div>
+              {rawStatus?.operations?.shortHoursDisplay && (
+                <div className="flex items-center space-x-1.5">
+                  <Clock className="w-4 h-4 text-garden-600 dark:text-garden-400" />
+                  <span>{rawStatus.operations.shortHoursDisplay}</span>
+                </div>
+              )}
             </div>
           </div>
 

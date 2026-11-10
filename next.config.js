@@ -13,6 +13,10 @@ if (process.env.NODE_ENV === 'production' && process.argv.includes('build')) {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    // Keep the Firebase Admin SDK as a native Node dependency instead of bundling it.
+    serverComponentsExternalPackages: ['firebase-admin'],
+  },
   images: {
     formats: ['image/avif', 'image/webp'],
     deviceSizes: [360, 480, 640, 750, 828, 1080, 1200, 1920, 2048, 3840],
@@ -51,7 +55,7 @@ const nextConfig = {
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
       img-src 'self' blob: data: https://res.cloudinary.com https://images.unsplash.com https://*.supabase.co https://maps.gstatic.com https://*.gstatic.com https://*.googleapis.com https://*.google.com https://*.google.co.in;
       font-src 'self' data: https://fonts.gstatic.com;
-      connect-src 'self' https://*.ably.io wss://*.ably.io https://*.firebasedatabase.app https://*.firebaseio.com https://graph.facebook.com https://nominatim.openstreetmap.org https://places.googleapis.com;
+      connect-src 'self' https://*.ably.io wss://*.ably.io https://graph.facebook.com https://nominatim.openstreetmap.org https://places.googleapis.com;
       frame-src 'self' https://maps.google.com https://www.google.com https://*.google.com https://maps.google.co.in https://www.google.co.in https://*.google.co.in;
       frame-ancestors 'none';
       object-src 'none';

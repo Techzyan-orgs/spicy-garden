@@ -93,8 +93,9 @@ export default function AdminOperationsPage() {
         });
         setTimeout(() => setStatusMessage(null), 4000);
       } else {
-        const errJson = await res.json();
-        setStatusMessage({ type: 'error', text: errJson.error || 'Failed to save settings' });
+        const errJson = await res.json().catch(() => ({}));
+        const issues = Array.isArray(errJson.issues) ? ` ${errJson.issues.join('; ')}` : '';
+        setStatusMessage({ type: 'error', text: `${errJson.error || 'Failed to save settings'}${issues}` });
       }
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err?.message || 'Network error while saving' });

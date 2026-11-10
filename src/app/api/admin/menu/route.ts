@@ -6,52 +6,33 @@ import {
   toggleDishAvailability,
 } from '@/lib/menuStore';
 import { DbMenuItem } from '@/types/restaurant';
-import { isAdminRequest } from '@/lib/authServer';
+import { requireAdmin } from '@/lib/apiGuard';
+import { storeErrorResponse } from '@/lib/apiErrors';
+
+export const runtime = 'nodejs';
 
 export const dynamic = 'force-dynamic';
 
-const checkAdminAuth = isAdminRequest;
 
 export async function GET(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
-    const data = await readMenuFromStore();
-    const normalizedItems = data.items.map((i: any) => ({
-      ...i,
-      category_id: i.category_id || i.category,
-      category: i.category || i.category_id,
-      is_veg: i.is_veg ?? i.isVeg ?? true,
-      isVeg: i.isVeg ?? i.is_veg ?? true,
-      is_spicy: i.is_spicy ?? i.isSpicy ?? false,
-      isSpicy: i.isSpicy ?? i.is_spicy ?? false,
-      is_bestseller: i.is_bestseller ?? i.isBestSeller ?? false,
-      isBestSeller: i.isBestSeller ?? i.is_bestseller ?? false,
-      is_special: i.is_special ?? i.isSpecial ?? false,
-      isSpecial: i.isSpecial ?? i.is_special ?? false,
-      image_url: i.image_url || i.image || null,
-      image: i.image || i.image_url || null,
-      chicken_price: i.chicken_price ?? i.chickenPrice ?? null,
-      chickenPrice: i.chickenPrice ?? i.chicken_price ?? null,
-      is_available: i.is_available ?? i.isAvailable ?? true,
-      isAvailable: i.isAvailable ?? i.is_available ?? true,
-    }));
-
-    return NextResponse.json({
-      categories: data.categories,
-      items: normalizedItems,
-    });
+    // Items are already normalised (snake_case + camelCase) by the store.
+    const data = await readMenuFromStore(true);
+    return NextResponse.json(
+      { categories: data.categories, items: data.items },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
   } catch (err: any) {
-    return NextResponse.json({ error: 'Failed to fetch menu' }, { status: 500 });
+    return storeErrorResponse(err, 'API Admin Menu', 'Failed to fetch menu');
   }
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
     const body = await req.json();
@@ -129,15 +110,13 @@ export async function POST(req: NextRequest) {
     const saved = await addOrUpdateMenuItem(dishItem);
     return NextResponse.json({ success: true, item: saved });
   } catch (err: any) {
-    console.error('[API Admin Menu POST] Error:', err);
-    return NextResponse.json({ error: err?.message || 'Failed to save dish.' }, { status: 500 });
+    return storeErrorResponse(err, 'API Admin Menu', 'Failed to save dish.');
   }
 }
 
 export async function PATCH(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
     const body = await req.json();
@@ -159,14 +138,13 @@ export async function PATCH(req: NextRequest) {
 
     return NextResponse.json({ success: true, item: updated });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message || 'Failed to update item.' }, { status: 500 });
+    return storeErrorResponse(err, 'API Admin Menu', 'Failed to update item.');
   }
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
     const { searchParams } = new URL(req.url);
@@ -183,6 +161,6 @@ export async function DELETE(req: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message || 'Failed to delete item.' }, { status: 500 });
+    return storeErrorResponse(err, 'API Admin Menu', 'Failed to delete item.');
   }
 }

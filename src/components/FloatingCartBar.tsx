@@ -8,7 +8,9 @@ import SmartUpsellSpotlight from './SmartUpsellSpotlight';
 
 export default function FloatingCartBar() {
   const { totalItems, totalPrice, isCartOpen, openCart, justAddedId } = useCart();
-  const { isOpen: isCafeOpen } = useCafeOperations();
+  const { isOpen, isStatusKnown } = useCafeOperations();
+  // Only show the "closed" styling once live hours confirm it; checkout itself is gated in OrderModal.
+  const isCafeOpen = isOpen || !isStatusKnown;
 
   // If cart is empty or currently open, hide floating bar
   if (totalItems === 0 || isCartOpen) {

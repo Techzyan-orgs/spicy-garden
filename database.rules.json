@@ -1,0 +1,16 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "security": {
+      "rate_limits": {
+        "$bucket": {
+          ".indexOn": ["resetAt"]
+        }
+      },
+      "idempotency": {
+        ".indexOn": ["expiresAt"]
+      }
+    }
+  }
+}

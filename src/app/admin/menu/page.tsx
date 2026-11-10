@@ -68,13 +68,13 @@ export default function AdminMenuPage() {
   const fetchMenuData = useCallback(async () => {
     try {
       const res = await fetch('/api/admin/menu');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.categories) setCategories(data.categories);
-        if (data.items) setItems(data.items);
-      }
-    } catch (err) {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not load the menu from the database.');
+      if (data.categories) setCategories(data.categories);
+      if (data.items) setItems(data.items);
+    } catch (err: any) {
       console.error('[Admin Menu] Error loading items:', err);
+      setFeedback({ type: 'error', message: err?.message || 'Could not load the menu from the database.' });
     } finally {
       setIsLoading(false);
     }
@@ -247,9 +247,13 @@ export default function AdminMenuPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: item.id, is_available: nextState }),
       });
-      if (!res.ok) throw new Error('Failed to update availability.');
-    } catch (err) {
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update availability.');
+      }
+    } catch (err: any) {
       console.error('[Admin Menu] Toggle error:', err);
+      setFeedback({ type: 'error', message: `"${item.name}": ${err?.message || 'Failed to update availability.'}` });
       fetchMenuData();
     }
   };
@@ -263,7 +267,10 @@ export default function AdminMenuPage() {
       const res = await fetch(`/api/admin/menu?id=${encodeURIComponent(item.id)}`, {
         method: 'DELETE',
       });
-      if (!res.ok) throw new Error('Failed to delete item.');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete item.');
+      }
 
       setFeedback({ type: 'success', message: `Deleted "${item.name}".` });
       notifyMenuUpdate();

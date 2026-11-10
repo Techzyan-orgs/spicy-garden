@@ -1,139 +1,122 @@
-import fs from 'fs';
-import path from 'path';
-import {
-  OperationsData,
-  LiveOperationsStatus,
-  ManualStatusOverride,
-  ClosureNotice,
-} from '@/types/operations';
-import { getFirebaseData, setFirebaseData, isFirebaseConfigured } from './firebaseRtdb';
+/**
+ * Café operations (timings, open/closed status, closure notices).
+ * Firebase Realtime Database (/operations) is the single source of truth.
+ *
+ * There are NO hardcoded default hours. If the record is missing, invalid or
+ * the database is unreachable, reads throw and callers respond with 503 —
+ * the site never guesses whether the café is open. Initial data is created
+ * with `node scripts/seed-operations.mjs`.
+ */
+import { z } from 'zod';
+import { OperationsData, LiveOperationsStatus } from '@/types/operations';
+import { dbGet, dbSet, DataUnavailableError } from './firebaseAdmin';
 
-const OPERATIONS_FILE_PATH = path.join(process.cwd(), 'src', 'data', 'operations.json');
+const TIME_12H = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
+const hour24 = z.number().min(0).max(24);
+const optionalDate = z.union([z.literal(''), z.string().regex(ISO_DATE, 'Expected YYYY-MM-DD')]).optional();
 
-// In-memory cache for fast lookups
-let cachedOperationsData: OperationsData | null = null;
-let lastReadTime = 0;
+export const operationsSchema = z.object({
+  manualStatus: z.enum(['auto', 'force_open', 'force_closed']),
+  manualStatusNote: z.string().max(120).optional().default(''),
+  updatedAt: z.string(),
+  updatedBy: z.string().max(80).optional(),
+  daysDisplay: z.string().min(1).max(120),
+  hoursDisplay: z.string().min(1).max(200),
+  shortHoursDisplay: z.string().min(1).max(120),
+  kitchenClosesDisplay: z.string().min(1).max(120),
+  regularOpenHour24: hour24,
+  regularCloseHour24: hour24,
+  fridayOpenHour24: hour24,
+  fridayCloseHour24: hour24,
+  schedule: z
+    .array(
+      z.object({
+        day: z.enum(DAY_NAMES),
+        open: z.string().regex(TIME_12H, 'Expected time like 2:00 PM'),
+        close: z.string().regex(TIME_12H, 'Expected time like 11:30 PM'),
+        isOpen: z.boolean(),
+      })
+    )
+    .length(7)
+    .refine((days) => new Set(days.map((d) => d.day)).size === 7, 'Schedule must list each day exactly once'),
+  closureNotice: z.object({
+    enabled: z.boolean(),
+    title: z.string().max(120),
+    message: z.string().max(1000),
+    startDate: optionalDate,
+    endDate: optionalDate,
+    reason: z.string().max(80).optional(),
+  }),
+});
 
-export function getDefaultOperationsData(): OperationsData {
-  return {
-    manualStatus: 'auto',
-    manualStatusNote: '',
-    updatedAt: new Date().toISOString(),
-    daysDisplay: 'Open All 7 Days',
-    hoursDisplay: 'Mon–Thu, Sat–Sun: 2:00 PM – 11:30 PM | Fri: 1:00 PM – 11:00 PM',
-    shortHoursDisplay: 'Mon–Thu, Sat–Sun: 2–11:30 PM • Fri: 1–11 PM',
-    kitchenClosesDisplay: 'Last Kitchen Order: 30 minutes before closing',
-    regularOpenHour24: 14.0,
-    regularCloseHour24: 23.5,
-    fridayOpenHour24: 13.0,
-    fridayCloseHour24: 23.0,
-    schedule: [
-      { day: 'Monday', open: '2:00 PM', close: '11:30 PM', isOpen: true },
-      { day: 'Tuesday', open: '2:00 PM', close: '11:30 PM', isOpen: true },
-      { day: 'Wednesday', open: '2:00 PM', close: '11:30 PM', isOpen: true },
-      { day: 'Thursday', open: '2:00 PM', close: '11:30 PM', isOpen: true },
-      { day: 'Friday', open: '1:00 PM', close: '11:00 PM', isOpen: true },
-      { day: 'Saturday', open: '2:00 PM', close: '11:30 PM', isOpen: true },
-      { day: 'Sunday', open: '2:00 PM', close: '11:30 PM', isOpen: true },
-    ],
-    closureNotice: {
-      enabled: false,
-      title: 'Special Notice',
-      message: '',
-      startDate: '',
-      endDate: '',
-      reason: 'Holiday',
-    },
-  };
-}
-
-function readLocalFallback(): OperationsData {
-  try {
-    if (fs.existsSync(OPERATIONS_FILE_PATH)) {
-      const content = fs.readFileSync(OPERATIONS_FILE_PATH, 'utf-8');
-      const parsed = JSON.parse(content);
-      if (parsed && typeof parsed === 'object') {
-        return {
-          ...getDefaultOperationsData(),
-          ...parsed,
-          closureNotice: {
-            ...getDefaultOperationsData().closureNotice,
-            ...(parsed.closureNotice || {}),
-          },
-        };
-      }
-    }
-  } catch (err) {
-    console.warn('[OperationsStore] Error reading local operations file:', err);
+export class OperationsNotConfiguredError extends DataUnavailableError {
+  constructor() {
+    super('Café operations have not been configured in the database. Run `node scripts/seed-operations.mjs --apply`.');
+    this.name = 'OperationsNotConfiguredError';
   }
-  return getDefaultOperationsData();
 }
+
+export class OperationsValidationError extends Error {
+  constructor(public readonly issues: string[]) {
+    super(`Invalid operations data: ${issues.join('; ')}`);
+    this.name = 'OperationsValidationError';
+  }
+}
+
+function formatIssues(err: z.ZodError): string[] {
+  return err.issues.map((i) => `${i.path.join('.') || 'operations'}: ${i.message}`);
+}
+
+/** Validates operations data, throwing OperationsValidationError with readable issues. */
+export function validateOperationsData(input: unknown): OperationsData {
+  const parsed = operationsSchema.safeParse(input);
+  if (!parsed.success) throw new OperationsValidationError(formatIssues(parsed.error));
+  return parsed.data as OperationsData;
+}
+
+const CACHE_TTL_MS = 30_000;
+let cache: { data: OperationsData; at: number } | null = null;
 
 /**
- * Reads operations data from Firebase Realtime Database (/operations) or fallback
+ * Reads operations data from Firebase. Throws OperationsNotConfiguredError if
+ * absent, DataUnavailableError if unreachable or invalid.
  */
 export async function readOperationsFromStore(forceFresh = false): Promise<OperationsData> {
-  const now = Date.now();
-  if (!forceFresh && cachedOperationsData && now - lastReadTime < 60000) {
-    return cachedOperationsData;
+  if (!forceFresh && cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.data;
+
+  const raw = await dbGet<unknown>('operations');
+  if (raw === null) throw new OperationsNotConfiguredError();
+
+  let data: OperationsData;
+  try {
+    data = validateOperationsData(raw);
+  } catch (err) {
+    console.error('[OperationsStore] Stored operations data is invalid:', err instanceof Error ? err.message : err);
+    throw new DataUnavailableError('Stored café operations data is invalid.', { cause: err });
   }
 
-  // 1. Fetch from Firebase Realtime Database
-  if (isFirebaseConfigured()) {
-    try {
-      const remote = await getFirebaseData<OperationsData>('operations');
-      if (remote && remote.schedule) {
-        const merged: OperationsData = {
-          ...getDefaultOperationsData(),
-          ...remote,
-          closureNotice: {
-            ...getDefaultOperationsData().closureNotice,
-            ...(remote.closureNotice || {}),
-          },
-        };
-        cachedOperationsData = merged;
-        lastReadTime = now;
-        return merged;
-      }
-    } catch (fbErr) {
-      console.warn('[OperationsStore] Firebase fetch warning:', fbErr);
-    }
-  }
-
-  // 2. Fallback to local file or defaults
-  const fallback = readLocalFallback();
-  cachedOperationsData = fallback;
-  lastReadTime = now;
-  return fallback;
+  cache = { data, at: Date.now() };
+  return data;
 }
 
-/**
- * Writes updated operations data to Firebase Realtime Database (/operations) and memory
- */
-export async function writeOperationsToStore(data: OperationsData): Promise<void> {
-  cachedOperationsData = data;
-  lastReadTime = Date.now();
+/** Validates and persists operations data. Throws on validation or write failure. */
+export async function writeOperationsToStore(input: OperationsData): Promise<OperationsData> {
+  const data = validateOperationsData(input);
+  await dbSet('operations', data);
+  cache = { data, at: Date.now() };
+  return data;
+}
 
-  // 1. Write to Firebase Realtime Database
-  if (isFirebaseConfigured()) {
-    const success = await setFirebaseData('operations', data);
-    if (!success) {
-      console.warn('[OperationsStore] Failed to write operations to Firebase');
-    }
-  }
-
-  // 2. Best-effort local file update (dev environment only; skipped on serverless production)
-  if (process.env.NODE_ENV !== 'production') {
-    try {
-      const dir = path.dirname(OPERATIONS_FILE_PATH);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(OPERATIONS_FILE_PATH, JSON.stringify(data, null, 2), 'utf-8');
-    } catch (fsErr) {
-      // Expected on read-only environments
-    }
-  }
+/** Formats a decimal 24h hour (e.g. 23.5) as "11:30 PM". */
+function formatHour24(value: number): string {
+  const totalMinutes = Math.round(value * 60) % (24 * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`;
 }
 
 export function parseTimeStringTo24(timeStr?: string): number | null {
@@ -153,8 +136,7 @@ export function parseTimeStringTo24(timeStr?: string): number | null {
 /**
  * Computes live operational status based on current IST time, schedule, manual override, and closure notices.
  */
-export function getLiveOperationalStatus(overrideData?: OperationsData): LiveOperationsStatus {
-  const data = overrideData || cachedOperationsData || readLocalFallback();
+export function getLiveOperationalStatus(data: OperationsData): LiveOperationsStatus {
 
   // Robust time & date in IST (Asia/Kolkata)
   const now = new Date();
@@ -269,8 +251,8 @@ export function getLiveOperationalStatus(overrideData?: OperationsData): LiveOpe
 
   const openTime = parseTimeStringTo24(todaySchedule?.open) ?? defaultOpen;
   const closeTime = parseTimeStringTo24(todaySchedule?.close) ?? defaultClose;
-  const openTimeText = todaySchedule?.open || (isFriday ? '1:00 PM' : '2:00 PM');
-  const closeTimeText = todaySchedule?.close || (isFriday ? '11:00 PM' : '11:30 PM');
+  const openTimeText = todaySchedule?.open || formatHour24(defaultOpen);
+  const closeTimeText = todaySchedule?.close || formatHour24(defaultClose);
   const todayHoursDisplay = `${openTimeText} – ${closeTimeText}`;
 
   if (!isTodayOpenConfigured) {

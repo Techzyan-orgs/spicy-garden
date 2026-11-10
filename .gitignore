@@ -48,3 +48,6 @@ next-env.d.ts
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Local database backups written by maintenance scripts
+.backups/

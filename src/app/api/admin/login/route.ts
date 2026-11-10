@@ -2,165 +2,58 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createOwnerSessionToken, OWNER_SESSION_COOKIE, SESSION_TTL_SECONDS } from '@/lib/auth';
 import { verifyOwnerCredentials, getSessionVersion } from '@/lib/authServer';
 import { ConfigError } from '@/lib/env';
+import { DataUnavailableError } from '@/lib/firebaseAdmin';
+import { consumeRateLimit, peekRateLimit, resetRateLimit } from '@/lib/rateLimit';
+import { getClientIp, jsonError, parseBody } from '@/lib/apiGuard';
+import { loginSchema } from '@/lib/schemas';
 
 export const runtime = 'nodejs';
 
-import crypto from 'crypto';
-import {
-  isFirebaseConfigured,
-  getFirebaseData,
-  setFirebaseData,
-  deleteFirebaseData,
-} from '@/lib/firebaseRtdb';
+/** There is a single owner account, so the account-wide limiter uses a fixed key. */
+const ACCOUNT_KEY = 'owner';
 
-interface LoginAttemptRecord {
-  count: number;
-  lockedUntil: number;
-  updatedAt: number;
+function tooMany(retryAfterSeconds: number): NextResponse {
+  return jsonError(
+    429,
+    `Too many failed login attempts. Please wait ${retryAfterSeconds} seconds before trying again.`,
+    undefined,
+    { 'Retry-After': String(retryAfterSeconds) }
+  );
 }
 
-// In-memory sliding window rate limiter: max 5 failed attempts per 15 minutes per IP
-const loginAttempts = new Map<string, LoginAttemptRecord>();
-
-function hashIp(ip: string): string {
-  return crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
-}
-
-function getClientIp(req: NextRequest): string {
-  // Prioritize verified hosting headers
-  const vercelIp = req.headers.get('x-vercel-forwarded-for');
-  if (vercelIp) return vercelIp.split(',')[0].trim();
-  const cfIp = req.headers.get('cf-connecting-ip');
-  if (cfIp) return cfIp.trim();
-  const realIp = req.headers.get('x-real-ip');
-  if (realIp) return realIp.trim();
-  const forwarded = req.headers.get('x-forwarded-for');
-  if (forwarded) return forwarded.split(',')[0].trim();
-  return '127.0.0.1';
-}
-
-async function checkRateLimit(ip: string): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
-  const now = Date.now();
-  let record = loginAttempts.get(ip);
-
-  // Cross-serverless instance sync via Firebase Realtime Database
-  if (!record && isFirebaseConfigured()) {
-    try {
-      const fbRecord = await getFirebaseData<LoginAttemptRecord>(
-        `security/login_attempts/${hashIp(ip)}`
-      );
-      if (fbRecord) {
-        record = fbRecord;
-        loginAttempts.set(ip, record);
-      }
-    } catch {}
-  }
-
-  if (!record) return { allowed: true, retryAfterSeconds: 0 };
-
-  // Expire stale failed attempts older than 15 minutes window
-  if (record.updatedAt && now - record.updatedAt > 15 * 60 * 1000 && record.lockedUntil <= now) {
-    loginAttempts.delete(ip);
-    if (isFirebaseConfigured()) {
-      deleteFirebaseData(`security/login_attempts/${hashIp(ip)}`).catch(() => {});
-    }
-    return { allowed: true, retryAfterSeconds: 0 };
-  }
-
-  if (record.lockedUntil > now) {
-    return {
-      allowed: false,
-      retryAfterSeconds: Math.ceil((record.lockedUntil - now) / 1000),
-    };
-  }
-
-  if (now > record.lockedUntil && record.lockedUntil !== 0) {
-    loginAttempts.delete(ip);
-    if (isFirebaseConfigured()) {
-      deleteFirebaseData(`security/login_attempts/${hashIp(ip)}`).catch(() => {});
-    }
-    return { allowed: true, retryAfterSeconds: 0 };
-  }
-
-  return { allowed: true, retryAfterSeconds: 0 };
-}
-
-async function recordFailedAttempt(ip: string) {
-  const now = Date.now();
-  const record: LoginAttemptRecord = loginAttempts.get(ip) || { count: 0, lockedUntil: 0, updatedAt: now };
-  if (record.updatedAt && now - record.updatedAt > 15 * 60 * 1000 && record.lockedUntil <= now) {
-    record.count = 0;
-  }
-  record.count += 1;
-  record.updatedAt = now;
-
-  if (record.count >= 5) {
-    // Lock for 15 minutes
-    record.lockedUntil = now + 15 * 60 * 1000;
-  }
-  loginAttempts.set(ip, record);
-
-  if (isFirebaseConfigured()) {
-    setFirebaseData(`security/login_attempts/${hashIp(ip)}`, record).catch(() => {});
-  }
-}
-
-async function clearFailedAttempts(ip: string) {
-  loginAttempts.delete(ip);
-  if (isFirebaseConfigured()) {
-    deleteFirebaseData(`security/login_attempts/${hashIp(ip)}`).catch(() => {});
-  }
-}
-
+/**
+ * Owner login. Failed attempts are limited per IP (5 / 15 min) and across all
+ * IPs for the owner account (20 / 15 min) using database-backed counters, so
+ * the limits hold across every serverless instance and cold start.
+ */
 export async function POST(req: NextRequest) {
   try {
     const ip = getClientIp(req);
-    const { allowed, retryAfterSeconds } = await checkRateLimit(ip);
 
-    if (!allowed) {
-      return NextResponse.json(
-        {
-          error: `Too many failed login attempts. Please wait ${retryAfterSeconds} seconds before trying again.`,
-        },
-        {
-          status: 429,
-          headers: { 'Retry-After': String(retryAfterSeconds) },
-        }
-      );
+    const [ipState, accountState] = await Promise.all([
+      peekRateLimit('loginIp', ip),
+      peekRateLimit('loginAccount', ACCOUNT_KEY),
+    ]);
+    if (!ipState.allowed || !accountState.allowed) {
+      return tooMany(Math.max(ipState.retryAfterSeconds, accountState.retryAfterSeconds));
     }
 
-    const body = await req.json();
-    const { email, password } = body;
+    const parsed = await parseBody(req, loginSchema);
+    if (!parsed.ok) return jsonError(400, 'Email and password are required.');
+    const { email, password } = parsed.data;
 
-    const trimmedEmail = (email || '').trim().toLowerCase();
-
-    if (!trimmedEmail || !password) {
-      return NextResponse.json(
-        { error: 'Email and password are required.' },
-        { status: 400 }
-      );
+    // Constant-time verification (prevents account enumeration)
+    if (!verifyOwnerCredentials(email, password)) {
+      await Promise.all([consumeRateLimit('loginIp', ip), consumeRateLimit('loginAccount', ACCOUNT_KEY)]);
+      return jsonError(401, 'Invalid email or password. Please verify your credentials.');
     }
 
-    // Unified verification in constant time (prevents account enumeration)
-    const isValid = typeof password === 'string' && verifyOwnerCredentials(trimmedEmail, password);
-    if (!isValid) {
-      await recordFailedAttempt(ip);
-      return NextResponse.json(
-        { error: 'Invalid email or password. Please verify your credentials.' },
-        { status: 401 }
-      );
-    }
-
-    // Clear failed attempts on successful login
-    await clearFailedAttempts(ip);
+    // Successful login clears this IP's failures (the account-wide window simply expires).
+    await resetRateLimit('loginIp', ip).catch(() => {});
 
     const token = await createOwnerSessionToken(await getSessionVersion());
 
-    const response = NextResponse.json({
-      success: true,
-      message: 'Owner authenticated successfully.',
-    });
-
+    const response = NextResponse.json({ success: true, message: 'Owner authenticated successfully.' });
     response.cookies.set({
       name: OWNER_SESSION_COOKIE,
       value: token,
@@ -170,20 +63,19 @@ export async function POST(req: NextRequest) {
       path: '/',
       maxAge: SESSION_TTL_SECONDS,
     });
-
     return response;
-  } catch (err: any) {
+  } catch (err) {
     if (err instanceof ConfigError) {
       console.error('[Admin Login API] Server misconfiguration:', err.message);
-      return NextResponse.json(
-        { error: 'Owner login is not available: server is misconfigured.' },
-        { status: 503 }
-      );
+      return jsonError(503, 'Owner login is not available: server is misconfigured.');
+    }
+    if (err instanceof DataUnavailableError) {
+      console.error('[Admin Login API] Database unavailable:', err.message);
+      return jsonError(503, 'Owner login is temporarily unavailable. Please try again shortly.', undefined, {
+        'Retry-After': '30',
+      });
     }
     console.error('[Admin Login API] Error:', err);
-    return NextResponse.json(
-      { error: 'An unexpected error occurred during login.' },
-      { status: 500 }
-    );
+    return jsonError(500, 'An unexpected error occurred during login.');
   }
 }

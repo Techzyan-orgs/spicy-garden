@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getLiveOperationalStatus, readOperationsFromStore } from '@/lib/operationsStore';
+import { storeErrorResponse } from '@/lib/apiErrors';
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 60;
 
+/** Public live café status. Served only from Firebase; 503 when unavailable. */
 export async function GET() {
   try {
     const operations = await readOperationsFromStore();
@@ -13,7 +14,7 @@ export async function GET() {
         'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
       },
     });
-  } catch (err: any) {
-    return NextResponse.json({ error: 'Failed to fetch operations' }, { status: 500 });
+  } catch (err) {
+    return storeErrorResponse(err, 'API Operations', 'Failed to fetch operations.');
   }
 }

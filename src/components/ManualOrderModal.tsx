@@ -24,7 +24,6 @@ import {
   Sandwich
 } from 'lucide-react';
 import { DbOrder, OrderStatus, PaymentStatus, PaymentMode } from '@/types/restaurant';
-import { RESTAURANT_DATA } from '@/data/restaurantData';
 
 export interface ManualOrderModalProps {
   isOpen: boolean;
@@ -90,7 +89,7 @@ export default function ManualOrderModal({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Fetch Menu from API or fallback
+  // Fetch the live menu (no built-in fallback: the database is the only source)
   useEffect(() => {
     if (!isOpen) return;
 
@@ -120,22 +119,12 @@ export default function ManualOrderModal({
           }
         }
       } catch (err) {
-        console.warn('[ManualOrderModal] Falling back to static menu data', err);
+        console.warn('[ManualOrderModal] Live menu load failed', err);
       }
 
       if (isMounted) {
-        setCategories(RESTAURANT_DATA.menu.categories);
-        setMenuItems(
-          RESTAURANT_DATA.menu.items.map((i) => ({
-            id: i.id,
-            name: i.name,
-            category: i.category,
-            price: i.price,
-            chickenPrice: i.chickenPrice,
-            isVeg: i.isVeg,
-            isAvailable: true,
-          }))
-        );
+        setMenuItems([]);
+        setErrorMsg('Could not load the live menu. Close this window and try again in a moment.');
         setIsLoadingMenu(false);
       }
     };

@@ -506,7 +506,7 @@ export default function ReservationModal({ isOpen, onClose, defaultOccasion }: R
         body: JSON.stringify({
           customerName: name.trim(),
           customerPhone: cleanPhone,
-          orderType: 'dine-in',
+          orderType: 'reservation',
           source: celebrationSource,
           notes: reservationNotes,
           items: [

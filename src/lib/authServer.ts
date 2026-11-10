@@ -6,7 +6,7 @@ import { scryptSync, timingSafeEqual, createHash } from 'crypto';
 import type { NextRequest } from 'next/server';
 import { getOwnerEmail, getOwnerPasswordHash } from './env';
 import { decodeOwnerSessionToken, OWNER_SESSION_COOKIE } from './auth';
-import { getFirebaseDataStrict, setFirebaseData } from './firebaseRtdb';
+import { dbGet, dbSet } from './firebaseAdmin';
 
 const SESSION_VERSION_PATH = 'security/session_version';
 const SCRYPT_MAX_MEM = 128 * 1024 * 1024;
@@ -43,15 +43,14 @@ export function verifyOwnerCredentials(email: string, password: string): boolean
 
 /** Current server-side session version. Throws if the database is unavailable (fail closed). */
 export async function getSessionVersion(): Promise<number> {
-  const value = await getFirebaseDataStrict<number>(SESSION_VERSION_PATH);
+  const value = await dbGet<number>(SESSION_VERSION_PATH);
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 1;
 }
 
 /** Invalidates every existing owner session (all devices). */
 export async function revokeAllOwnerSessions(): Promise<void> {
   const current = await getSessionVersion();
-  const ok = await setFirebaseData(SESSION_VERSION_PATH, current + 1);
-  if (!ok) throw new Error('Failed to revoke sessions: database write failed.');
+  await dbSet(SESSION_VERSION_PATH, current + 1);
 }
 
 /**

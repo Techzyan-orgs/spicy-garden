@@ -1,15 +1,14 @@
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { isAdminRequest } from '@/lib/authServer';
+import { requireAdmin } from '@/lib/apiGuard';
 import { generateAblyToken } from '@/lib/ably';
 
 export async function GET(req: NextRequest) {
   // Protect Ably token generation - strictly accessible by authenticated owner
-  const isAuth = await isAdminRequest(req);
-  if (!isAuth) {
-    return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   const ablyAuth = await generateAblyToken();
   if (!ablyAuth) {

@@ -3,96 +3,103 @@ import {
   readOperationsFromStore,
   writeOperationsToStore,
   getLiveOperationalStatus,
+  OperationsNotConfiguredError,
 } from '@/lib/operationsStore';
 import { OperationsData } from '@/types/operations';
-import { isAdminRequest } from '@/lib/authServer';
-import { isFirebaseConfigured } from '@/lib/firebaseRtdb';
+import { requireAdmin } from '@/lib/apiGuard';
+import { storeErrorResponse } from '@/lib/apiErrors';
+
+export const runtime = 'nodejs';
 
 export const dynamic = 'force-dynamic';
 
-const checkAdminAuth = isAdminRequest;
+
+function text(value: unknown, current: string | undefined): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : current;
+}
+
+function hour(value: unknown, current: number | undefined): number | undefined {
+  return value !== undefined && value !== null && value !== '' ? Number(value) : current;
+}
 
 export async function GET(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
-    const operations = await readOperationsFromStore();
-    const liveStatus = getLiveOperationalStatus(operations);
-    const fbConfigured = isFirebaseConfigured();
-
-    return NextResponse.json({
-      operations,
-      liveStatus,
-      isFirebaseConfigured: fbConfigured,
-      persistenceMode: fbConfigured ? 'firebase_realtime_db' : 'local_memory_fallback',
-    });
-  } catch (err: any) {
-    return NextResponse.json({ error: 'Failed to fetch operations' }, { status: 500 });
+    const operations = await readOperationsFromStore(true);
+    return NextResponse.json(
+      {
+        operations,
+        liveStatus: getLiveOperationalStatus(operations),
+        isFirebaseConfigured: true,
+      },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
+  } catch (err) {
+    return storeErrorResponse(err, 'API Admin Operations', 'Failed to fetch operations.');
   }
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
-    const body = await req.json();
-    const current = await readOperationsFromStore(true);
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Request body must be a JSON object.' }, { status: 400 });
+    }
 
-    const updated: OperationsData = {
+    // When nothing is stored yet the body must contain a complete record (validated below).
+    let current: Partial<OperationsData> = {};
+    try {
+      current = await readOperationsFromStore(true);
+    } catch (err) {
+      if (!(err instanceof OperationsNotConfiguredError)) throw err;
+    }
+
+    const notice = body.closureNotice;
+    const candidate = {
       ...current,
       manualStatus: body.manualStatus ?? current.manualStatus,
-      manualStatusNote: body.manualStatusNote !== undefined ? body.manualStatusNote : current.manualStatusNote,
+      manualStatusNote:
+        typeof body.manualStatusNote === 'string' ? body.manualStatusNote.trim() : current.manualStatusNote ?? '',
       updatedAt: new Date().toISOString(),
       updatedBy: 'Admin Portal',
-      daysDisplay: (body.daysDisplay || current.daysDisplay).trim(),
-      hoursDisplay: (body.hoursDisplay || current.hoursDisplay).trim(),
-      shortHoursDisplay: (body.shortHoursDisplay || current.shortHoursDisplay).trim(),
-      kitchenClosesDisplay: (body.kitchenClosesDisplay || current.kitchenClosesDisplay).trim(),
-      regularOpenHour24: body.regularOpenHour24 !== undefined ? Number(body.regularOpenHour24) : current.regularOpenHour24,
-      regularCloseHour24: body.regularCloseHour24 !== undefined ? Number(body.regularCloseHour24) : current.regularCloseHour24,
-      fridayOpenHour24: body.fridayOpenHour24 !== undefined ? Number(body.fridayOpenHour24) : current.fridayOpenHour24,
-      fridayCloseHour24: body.fridayCloseHour24 !== undefined ? Number(body.fridayCloseHour24) : current.fridayCloseHour24,
+      daysDisplay: text(body.daysDisplay, current.daysDisplay),
+      hoursDisplay: text(body.hoursDisplay, current.hoursDisplay),
+      shortHoursDisplay: text(body.shortHoursDisplay, current.shortHoursDisplay),
+      kitchenClosesDisplay: text(body.kitchenClosesDisplay, current.kitchenClosesDisplay),
+      regularOpenHour24: hour(body.regularOpenHour24, current.regularOpenHour24),
+      regularCloseHour24: hour(body.regularCloseHour24, current.regularCloseHour24),
+      fridayOpenHour24: hour(body.fridayOpenHour24, current.fridayOpenHour24),
+      fridayCloseHour24: hour(body.fridayCloseHour24, current.fridayCloseHour24),
       schedule: Array.isArray(body.schedule) ? body.schedule : current.schedule,
       closureNotice: body.deleteNotice
+        ? { enabled: false, title: '', message: '', startDate: '', endDate: '', reason: 'Holiday' }
+        : notice && typeof notice === 'object'
         ? {
-            enabled: false,
-            title: '',
-            message: '',
-            startDate: '',
-            endDate: '',
-            reason: 'Holiday',
-          }
-        : body.closureNotice
-        ? {
-            enabled: Boolean(body.closureNotice.enabled),
-            title: (body.closureNotice.title || '').trim(),
-            message: (body.closureNotice.message || '').trim(),
-            startDate: (body.closureNotice.startDate || '').trim(),
-            endDate: (body.closureNotice.endDate || '').trim(),
-            reason: (body.closureNotice.reason || 'General').trim(),
+            enabled: Boolean(notice.enabled),
+            title: String(notice.title ?? '').trim(),
+            message: String(notice.message ?? '').trim(),
+            startDate: String(notice.startDate ?? '').trim(),
+            endDate: String(notice.endDate ?? '').trim(),
+            reason: String(notice.reason || 'General').trim(),
           }
         : current.closureNotice,
     };
 
-    await writeOperationsToStore(updated);
-    const liveStatus = getLiveOperationalStatus(updated);
-    const fbConfigured = isFirebaseConfigured();
+    // Validates the full record; throws OperationsValidationError (→ 400) on bad input.
+    const saved = await writeOperationsToStore(candidate as OperationsData);
 
     return NextResponse.json({
       success: true,
-      operations: updated,
-      liveStatus,
-      isFirebaseConfigured: fbConfigured,
+      operations: saved,
+      liveStatus: getLiveOperationalStatus(saved),
+      isFirebaseConfigured: true,
     });
-  } catch (err: any) {
-    console.error('[API Admin Operations POST] Error:', err);
-    return NextResponse.json(
-      { error: err?.message || 'Failed to save cafe operations settings.' },
-      { status: 500 }
-    );
+  } catch (err) {
+    return storeErrorResponse(err, 'API Admin Operations', 'Failed to save café operations settings.');
   }
 }

@@ -1,8 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { RESTAURANT_DATA, MenuItem, MenuCategory } from '@/data/restaurantData';
+import { MenuItem, MenuCategory } from '@/data/restaurantData';
 
+/**
+ * Live menu from /api/menu (Firebase is the only source). There is no built-in
+ * fallback menu: until the first successful load `items`/`categories` are empty,
+ * `isLoading` is true, and on failure `error` is set and loading is retried with
+ * exponential backoff.
+ */
 export interface ExtendedMenuItem extends MenuItem {
   isAvailable?: boolean;
   image_url?: string;
@@ -11,46 +17,61 @@ export interface ExtendedMenuItem extends MenuItem {
 interface MenuCache {
   categories: MenuCategory[];
   items: ExtendedMenuItem[];
-  isLive: boolean;
   timestamp: number;
 }
 
+const MENU_UNAVAILABLE = 'Our menu is temporarily unavailable.';
+const RETRY_MIN_MS = 3_000;
+const RETRY_MAX_MS = 60_000;
+
 let globalMenuCache: MenuCache | null = null;
+let globalMenuError: string | null = null;
 let inFlightMenuPromise: Promise<MenuCache | null> | null = null;
-const menuListeners = new Set<(cache: MenuCache) => void>();
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryDelay = RETRY_MIN_MS;
+
+type Listener = (state: { cache: MenuCache | null; error: string | null }) => void;
+const menuListeners = new Set<Listener>();
+
+function notify() {
+  menuListeners.forEach((l) => l({ cache: globalMenuCache, error: globalMenuError }));
+}
+
+function scheduleRetry() {
+  if (retryTimer || menuListeners.size === 0) return;
+  const delay = retryDelay;
+  retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (menuListeners.size > 0) void getOrFetchMenu(true);
+  }, delay);
+}
 
 async function getOrFetchMenu(force = false): Promise<MenuCache | null> {
-  if (!force && globalMenuCache) {
-    return globalMenuCache;
-  }
+  if (!force && globalMenuCache) return globalMenuCache;
   // Deduplicate any concurrent in-flight fetch across all callers and events
-  if (inFlightMenuPromise) {
-    return inFlightMenuPromise;
-  }
+  if (inFlightMenuPromise) return inFlightMenuPromise;
 
   inFlightMenuPromise = (async () => {
     try {
       const res = await fetch('/api/menu', { cache: 'no-store' });
-      if (!res.ok) throw new Error('Failed to fetch menu');
+      if (!res.ok) throw new Error(`Menu request failed (${res.status})`);
       const data = await res.json();
-
-      if (data.categories && data.items) {
-        const newCache: MenuCache = {
-          categories: data.categories,
-          items: data.items,
-          isLive: true,
-          timestamp: Date.now(),
-        };
-        globalMenuCache = newCache;
-        menuListeners.forEach((listener) => listener(newCache));
-        return newCache;
+      if (!Array.isArray(data?.categories) || !Array.isArray(data?.items)) {
+        throw new Error('Malformed menu response');
       }
+      globalMenuCache = { categories: data.categories, items: data.items, timestamp: Date.now() };
+      globalMenuError = null;
+      retryDelay = RETRY_MIN_MS;
     } catch (err) {
-      console.warn('[useMenuData] Using cached or default menu data:', err);
-      return globalMenuCache;
+      console.warn('[useMenuData] Menu load failed:', err);
+      // Keep showing the last live menu if we have one; only surface an error when we have nothing.
+      if (!globalMenuCache) globalMenuError = MENU_UNAVAILABLE;
+      scheduleRetry();
     } finally {
       inFlightMenuPromise = null;
     }
+    notify();
     return globalMenuCache;
   })();
 
@@ -58,69 +79,45 @@ async function getOrFetchMenu(force = false): Promise<MenuCache | null> {
 }
 
 export function useMenuData() {
-  const [categories, setCategories] = useState<MenuCategory[]>(
-    globalMenuCache ? globalMenuCache.categories : RESTAURANT_DATA.menu.categories
-  );
-  const [items, setItems] = useState<ExtendedMenuItem[]>(
-    globalMenuCache
-      ? globalMenuCache.items
-      : RESTAURANT_DATA.menu.items.map((i) => ({ ...i, isAvailable: true }))
-  );
-  const [isLoading, setIsLoading] = useState<boolean>(!globalMenuCache);
-  const [isLive, setIsLive] = useState<boolean>(true);
+  const [categories, setCategories] = useState<MenuCategory[]>(globalMenuCache?.categories ?? []);
+  const [items, setItems] = useState<ExtendedMenuItem[]>(globalMenuCache?.items ?? []);
+  const [isLoading, setIsLoading] = useState<boolean>(!globalMenuCache && !globalMenuError);
+  const [error, setError] = useState<string | null>(globalMenuCache ? null : globalMenuError);
 
   const fetchMenu = useCallback(async (force = false) => {
-    setIsLoading(!globalMenuCache);
-    const result = await getOrFetchMenu(force);
-    if (result) {
-      setCategories(result.categories);
-      setItems(result.items);
-      setIsLive(true);
+    if (!globalMenuCache) {
+      setIsLoading(true);
+      setError(null);
     }
-    setIsLoading(false);
+    await getOrFetchMenu(force);
   }, []);
 
   useEffect(() => {
     let isMounted = true;
-    const handleCacheUpdate = (cache: MenuCache) => {
-      if (isMounted) {
+    const handleUpdate: Listener = ({ cache, error: err }) => {
+      if (!isMounted) return;
+      if (cache) {
         setCategories(cache.categories);
         setItems(cache.items);
-        setIsLive(true);
-        setIsLoading(false);
       }
+      setError(cache ? null : err);
+      setIsLoading(false);
     };
 
-    menuListeners.add(handleCacheUpdate);
+    menuListeners.add(handleUpdate);
 
-    // If cache already exists, do not fire a network request on mount
     if (globalMenuCache) {
-      setCategories(globalMenuCache.categories);
-      setItems(globalMenuCache.items);
-      setIsLoading(false);
+      handleUpdate({ cache: globalMenuCache, error: null });
     } else {
-      // Deduplicated initial fetch across all concurrent mounting components
-      getOrFetchMenu(false)
-        .then((cache) => {
-          if (isMounted && cache) {
-            setCategories(cache.categories);
-            setItems(cache.items);
-          }
-        })
-        .finally(() => {
-          if (isMounted) {
-            setIsLoading(false);
-          }
-        });
+      // Deduplicated initial fetch across all concurrently mounting components
+      void getOrFetchMenu(false);
     }
 
     const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'sg_menu_last_update') {
-        getOrFetchMenu(true);
-      }
+      if (e.key === 'sg_menu_last_update') void getOrFetchMenu(true);
     };
     const handleLocalMenuUpdate = () => {
-      getOrFetchMenu(true);
+      void getOrFetchMenu(true);
     };
 
     window.addEventListener('storage', handleStorage);
@@ -128,7 +125,7 @@ export function useMenuData() {
 
     return () => {
       isMounted = false;
-      menuListeners.delete(handleCacheUpdate);
+      menuListeners.delete(handleUpdate);
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('sg_menu_updated', handleLocalMenuUpdate);
     };
@@ -138,7 +135,9 @@ export function useMenuData() {
     categories,
     items,
     isLoading,
-    isLive,
+    error,
+    /** True when a live menu has been loaded. */
+    isLive: items.length > 0 || categories.length > 0,
     refetch: () => fetchMenu(true),
   };
 }

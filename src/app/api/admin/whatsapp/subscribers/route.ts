@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isAdminRequest } from '@/lib/authServer';
+import { requireAdmin, jsonError } from '@/lib/apiGuard';
+import { INDIAN_MOBILE, normalizePhone, subscriberIdSchema } from '@/lib/schemas';
 import {
   getAllSubscribersDecrypted,
   addOrUpdateSubscriber,
@@ -7,14 +8,14 @@ import {
 } from '@/lib/whatsappStore';
 import { isWhatsAppConfigured } from '@/lib/whatsapp';
 
+export const runtime = 'nodejs';
+
 export const dynamic = 'force-dynamic';
 
-const checkAdminAuth = isAdminRequest;
 
 export async function GET(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
     const subscribers = await getAllSubscribersDecrypted();
@@ -43,21 +44,20 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
-    const body = await req.json();
-    const { phone, customerName, source } = body;
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') return jsonError(400, 'Request body must be valid JSON.');
 
-    const cleanPhone = phone?.replace(/\D/g, '') || '';
-    if (cleanPhone.length < 10) {
-      return NextResponse.json(
-        { error: 'Valid 10-digit mobile number required.' },
-        { status: 400 }
-      );
+    const cleanPhone = normalizePhone(typeof body.phone === 'string' ? body.phone : '');
+    if (!INDIAN_MOBILE.test(cleanPhone)) {
+      return jsonError(400, 'Valid 10-digit mobile number required (starting with 6-9).');
     }
+    const customerName = typeof body.customerName === 'string' ? body.customerName.trim().slice(0, 100) : '';
+    const source =
+      typeof body.source === 'string' && /^[a-z0-9_]{1,50}$/.test(body.source) ? body.source : undefined;
 
     const saved = await addOrUpdateSubscriber({
       phone: cleanPhone,
@@ -74,16 +74,15 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
 
-    if (!id) {
-      return NextResponse.json({ error: 'Subscriber ID is required.' }, { status: 400 });
+    if (!id || !subscriberIdSchema.safeParse(id).success) {
+      return jsonError(400, 'A valid subscriber ID is required.');
     }
 
     const removed = await deleteSubscriber(id);

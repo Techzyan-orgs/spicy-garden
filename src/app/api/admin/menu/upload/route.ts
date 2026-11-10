@@ -1,19 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { isAdminRequest } from '@/lib/authServer';
+import { requireAdmin } from '@/lib/apiGuard';
 import { uploadImageToCloudinary, isCloudinaryConfigured } from '@/lib/cloudinary';
+
+export const runtime = 'nodejs';
 
 export const dynamic = 'force-dynamic';
 
-const checkAdminAuth = isAdminRequest;
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized: Owner session required.' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
     const formData = await req.formData();
@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error('[API Upload] Unexpected error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Failed to upload image.' },
+      { error: 'Failed to upload image.' },
       { status: 500 }
     );
   }

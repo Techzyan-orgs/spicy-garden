@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isAdminRequest } from '@/lib/authServer';
+import { requireAdmin } from '@/lib/apiGuard';
 import {
   getAllSubscribersDecrypted,
   updateCampaignDispatchStatus,
@@ -11,14 +11,14 @@ import {
   formatWhatsAppPhoneNumber,
 } from '@/lib/whatsapp';
 
+export const runtime = 'nodejs';
+
 export const dynamic = 'force-dynamic';
 
-const checkAdminAuth = isAdminRequest;
 
 export async function POST(req: NextRequest) {
-  if (!(await checkAdminAuth(req))) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const denied = await requireAdmin(req);
+  if (denied) return denied;
 
   try {
     const body = await req.json();
@@ -133,11 +133,13 @@ export async function POST(req: NextRequest) {
               successfulIds.push(sub.id);
             } else {
               failedCount++;
-              dispatchErrors.push({ phone: sub.phone, error: sendResult.error || 'Failed' });
+              dispatchErrors.push({ phone: maskPhone(sub.phone), error: 'Delivery failed' });
+              console.warn('[Admin WhatsApp Broadcast] Send failed:', sendResult.error);
             }
           } catch (err: any) {
             failedCount++;
-            dispatchErrors.push({ phone: sub.phone, error: err?.message || 'Dispatch exception' });
+            dispatchErrors.push({ phone: maskPhone(sub.phone), error: 'Delivery failed' });
+            console.warn('[Admin WhatsApp Broadcast] Send exception:', err?.message || err);
           }
         })
       );
@@ -164,8 +166,14 @@ export async function POST(req: NextRequest) {
   } catch (err: any) {
     console.error('[Admin WhatsApp Broadcast API] Unexpected error:', err);
     return NextResponse.json(
-      { error: err?.message || 'Broadcast campaign execution failed.' },
+      { error: 'Broadcast campaign execution failed.' },
       { status: 500 }
     );
   }
+}
+
+/** Never return full customer numbers in API responses. */
+function maskPhone(phone: string | undefined): string {
+  const p = String(phone ?? '');
+  return p.length >= 4 ? `******${p.slice(-4)}` : '******';
 }

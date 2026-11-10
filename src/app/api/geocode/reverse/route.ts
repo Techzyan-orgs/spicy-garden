@@ -1,6 +1,9 @@
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';
+import { enforceRateLimit, getClientIp } from '@/lib/apiGuard';
+import { storeErrorResponse } from '@/lib/apiErrors';
 
 /**
  * Server-side Reverse Geocoding Route with LRU/TTL In-Memory Cache
@@ -22,25 +25,6 @@ interface CacheEntry {
 const geocodeCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-// IP rate limiter to protect Nominatim upstream service (max 15 requests per minute per IP)
-const geocodeRateLimits = new Map<string, { count: number; resetAt: number }>();
-
-function checkGeocodeRateLimit(ip: string): boolean {
-  const now = Date.now();
-  if (geocodeRateLimits.size > 1000) {
-    geocodeRateLimits.forEach((val, key) => {
-      if (now > val.resetAt) geocodeRateLimits.delete(key);
-    });
-  }
-  const record = geocodeRateLimits.get(ip);
-  if (!record || now > record.resetAt) {
-    geocodeRateLimits.set(ip, { count: 1, resetAt: now + 60 * 1000 });
-    return true;
-  }
-  record.count += 1;
-  return record.count <= 15;
-}
-
 function getCacheKey(lat: number, lng: number): string {
   // Round to ~3 decimal places (~110m resolution)
   return `${lat.toFixed(3)}_${lng.toFixed(3)}`;
@@ -48,19 +32,13 @@ function getCacheKey(lat: number, lng: number): string {
 
 export async function GET(req: NextRequest) {
   try {
-    const clientIp =
-      req.headers.get('x-vercel-forwarded-for')?.split(',')[0].trim() ||
-      req.headers.get('cf-connecting-ip')?.trim() ||
-      req.headers.get('x-real-ip')?.trim() ||
-      req.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-      '127.0.0.1';
-
-    if (!checkGeocodeRateLimit(clientIp)) {
-      return NextResponse.json(
-        { error: 'Too many location requests. Please wait a moment before trying again.' },
-        { status: 429 }
-      );
-    }
+    // Distributed per-IP limit protects the Nominatim upstream (15 requests / minute).
+    const limited = await enforceRateLimit(
+      'geocode',
+      getClientIp(req),
+      'Too many location requests. Please wait a moment before trying again.'
+    );
+    if (limited) return limited;
     const { searchParams } = new URL(req.url);
     const latStr = searchParams.get('lat');
     const lngStr = searchParams.get('lng');
@@ -185,11 +163,7 @@ export async function GET(req: NextRequest) {
       lng,
       mapsLink,
     });
-  } catch (err: any) {
-    console.error('[ReverseGeocode] Server error:', err);
-    return NextResponse.json(
-      { error: err?.message || 'Failed to resolve location' },
-      { status: 500 }
-    );
+  } catch (err) {
+    return storeErrorResponse(err, 'ReverseGeocode', 'Failed to resolve location.');
   }
 }

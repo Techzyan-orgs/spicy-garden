@@ -3,13 +3,14 @@ import path from 'path';
 import crypto from 'crypto';
 import { encryptSensitiveData, decryptSensitiveData } from './crypto';
 import { formatWhatsAppPhoneNumber } from './whatsapp';
+// TODO(Phase 5): rewrite this store (Firebase only, per-record writes, HMAC phone index).
 import {
-  getFirebaseData,
-  setFirebaseData,
-  updateFirebaseData,
-  deleteFirebaseData,
-  isFirebaseConfigured
-} from './firebaseRtdb';
+  dbGet as getFirebaseData,
+  dbSet as setFirebaseData,
+  dbUpdate as updateFirebaseData,
+  dbRemove as deleteFirebaseData,
+  isFirebaseConfigured,
+} from '@/lib/firebaseAdmin';
 
 export interface StoredSubscriberRecord {
   id: string;
@@ -152,10 +153,8 @@ export async function writeStoredSubscribers(records: StoredSubscriberRecord[]):
     for (const r of sanitizedRecords) {
       recordsMap[r.id] = r;
     }
-    const success = await setFirebaseData('subscribers', recordsMap);
-    if (!success) {
-      console.warn('[WhatsAppStore] Failed to write subscribers to Firebase');
-    }
+    // Throws on failure so callers never report a save that did not happen.
+    await setFirebaseData('subscribers', recordsMap);
   }
 
   // 2. Best-effort local file write for dev (skipped on serverless production)

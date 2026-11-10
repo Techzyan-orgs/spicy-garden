@@ -42,7 +42,7 @@ export default function SmartUpsellSpotlight() {
         {/* Middle: Rich Food Photo, Copywriting & Combo Tag */}
         <div className="flex items-start space-x-3 sm:space-x-3.5 mb-3">
           {/* Dish Image (72x72px with glow ring) */}
-          <div className="relative w-18 h-18 sm:w-20 sm:h-20 rounded-2xl overflow-hidden flex-shrink-0 border-2 border-amber-500/40 bg-gray-900 shadow-md">
+          <div className="relative w-[72px] h-[72px] sm:w-20 sm:h-20 rounded-2xl overflow-hidden flex-shrink-0 border-2 border-amber-500/40 bg-gray-900 shadow-md">
             {image ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img

@@ -97,6 +97,10 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
   const dismissTimerRef = useRef<NodeJS.Timeout | null>(null);
   const knownOrderIdsRef = useRef<Set<string>>(new Set());
   const initialHydratedRef = useRef<boolean>(false);
+  // Live Ably stream health drives the safety-net poll rate (see effect #2).
+  const streamConnectedRef = useRef<boolean>(false);
+  const pollNowRef = useRef<() => void>(() => {});
+  const pollSoonRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -274,7 +278,7 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
           setActiveOrderAlert(null);
         }
 
-        await fetch('/api/orders', {
+        await fetch('/api/admin/orders', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ orderId, action: 'acknowledge' }),
@@ -297,12 +301,37 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
     let refreshTimer: NodeJS.Timeout | null = null;
     let retryTimer: NodeJS.Timeout | null = null;
 
+    // Connected -> poll once now (catch anything missed while down), then slow down.
+    // Disconnected -> make sure the next safety-net poll happens within the fast interval.
+    const setStreamConnected = (connected: boolean) => {
+      const was = streamConnectedRef.current;
+      streamConnectedRef.current = connected;
+      if (connected && !was) pollNowRef.current();
+      else if (!connected && was) pollSoonRef.current();
+    };
+
+    // The stream replays recent history on every (re)connect (rewind). Only alert for
+    // orders this tab has not already seen, so pending orders don't chime again after
+    // each reconnect / 50-minute token rotation, while orders missed during the gap still do.
+    const handleStreamOrder = (payload: any) => {
+      const id = payload && typeof payload === 'object' ? payload.id : undefined;
+      if (id) {
+        const known = knownOrderIdsRef.current;
+        const num = payload.order_number;
+        if (known.has(String(id)) || (num && known.has(String(num)))) return;
+        known.add(String(id));
+        if (num) known.add(String(num));
+      }
+      handleIncomingOrder(payload);
+    };
+
     const cleanup = () => {
       if (refreshTimer) clearTimeout(refreshTimer);
       if (retryTimer) clearTimeout(retryTimer);
       if (es) {
         es.close();
         es = null;
+        setStreamConnected(false);
       }
     };
 
@@ -335,6 +364,8 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
 
         es = new EventSource(streamUrl);
 
+        es.onopen = () => setStreamConnected(true);
+
         es.onmessage = (event) => {
           try {
             const parsed = JSON.parse(event.data);
@@ -348,7 +379,7 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
                     orderPayload = JSON.parse(orderPayload);
                   } catch {}
                 }
-                handleIncomingOrder(orderPayload);
+                handleStreamOrder(orderPayload);
               } else if (msg.name === 'order_acknowledged' && msg.data) {
                 let ackPayload = msg.data;
                 if (typeof ackPayload === 'string') {
@@ -434,7 +465,7 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
 
     const fetchPendingOrders = async () => {
       try {
-        const res = await fetch('/api/orders?status=pending', { cache: 'no-store' });
+        const res = await fetch('/api/admin/orders?status=pending', { cache: 'no-store' });
         if (res.ok) {
           const json = await res.json();
           const serverPending: GlobalOrderNotification[] = json.orders || [];
@@ -504,9 +535,66 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
       } catch (e) {}
     };
 
-    fetchPendingOrders();
-    const interval = setInterval(fetchPendingOrders, 10000);
-    return () => clearInterval(interval);
+    // Adaptive safety-net poll: the live Ably stream delivers new orders instantly, so while
+    // it is connected we only reconcile every 60s; while it is down we poll every 10s.
+    const FAST_POLL_MS = 10_000;
+    const SLOW_POLL_MS = 60_000;
+    const MIN_GAP_MS = 3_000; // collapse bursts of "poll now" triggers
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    let inFlight = false;
+    let nextAt = 0;
+    let lastRunAt = 0;
+
+    const schedule = (delay: number) => {
+      if (stopped) return;
+      if (timer) clearTimeout(timer);
+      nextAt = Date.now() + delay;
+      timer = setTimeout(run, delay);
+    };
+
+    async function run() {
+      if (stopped || inFlight) return;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      inFlight = true;
+      lastRunAt = Date.now();
+      try {
+        await fetchPendingOrders();
+      } finally {
+        inFlight = false;
+        schedule(streamConnectedRef.current ? SLOW_POLL_MS : FAST_POLL_MS);
+      }
+    }
+
+    const pollNow = () => {
+      if (Date.now() - lastRunAt < MIN_GAP_MS) return;
+      void run();
+    };
+
+    pollNowRef.current = pollNow;
+    pollSoonRef.current = () => {
+      if (!inFlight && nextAt - Date.now() > FAST_POLL_MS) schedule(FAST_POLL_MS);
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') pollNow();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', pollNow);
+
+    void run();
+
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      pollNowRef.current = () => {};
+      pollSoonRef.current = () => {};
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', pollNow);
+    };
   }, [isLoginPage]);
 
   // 3. Same-Browser Cross-Tab / Window Listeners (BroadcastChannel + storage + CustomEvent)

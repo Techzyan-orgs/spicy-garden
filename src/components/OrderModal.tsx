@@ -56,10 +56,11 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
     statusText: cafeStatusText,
     nextStatusText: cafeNextStatusText,
     todayHoursDisplay,
+    isStatusKnown: isCafeStatusKnown,
   } = useCafeOperations();
 
   // Load menu data to derive smart pairing complements (suppressed if user already accepted a suggestion)
-  const { items: allMenuItems } = useMenuData();
+  const { items: allMenuItems, error: menuError } = useMenuData();
   const complements = useMemo(() => {
     if (hasAcceptedUpsell) return [];
     return getCartComplements({ cartItems, allMenuItems });
@@ -279,6 +280,18 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
       return;
     }
 
+    if (menuError && allMenuItems.length === 0) {
+      setErrorMsg('Our menu is temporarily unavailable, so orders cannot be placed right now. Your cart is saved; please try again shortly or call us.');
+      return;
+    }
+
+    if (!isCafeStatusKnown) {
+      setErrorMsg(
+        "We couldn't confirm today's opening hours yet. Your cart is saved; please try again in a moment or call us to order."
+      );
+      return;
+    }
+
     if (!isCafeOpen) {
       setErrorMsg(
         `The café is currently closed (${cafeStatusText || 'Not accepting orders'}). Your items are safely saved in your cart and will be ready when we open!`
@@ -317,6 +330,12 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
         }
       }
 
+      const cleanUpiRef = upiRefId.replace(/[^A-Za-z0-9]/g, '');
+      if (cleanUpiRef && (cleanUpiRef.length < 6 || cleanUpiRef.length > 35)) {
+        setErrorMsg('The UPI reference / UTR should be 6–35 letters or digits. Leave it empty if you do not have it.');
+        return;
+      }
+
       const idempotencyKey = `sg_ord_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       const isAdvanceUPI = paymentMode === 'upi';
       const resolvedPaymentStatus = 'unpaid';
@@ -343,7 +362,7 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
           idempotencyKey,
           paymentStatus: resolvedPaymentStatus,
           paymentMode: paymentMode,
-          upiTransactionId: upiRefId.trim() || undefined,
+          upiTransactionId: cleanUpiRef || undefined,
         }),
       });
 
@@ -603,7 +622,16 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
             )}
 
             {/* Café Closed Notice Banner */}
-            {!isCafeOpen && (
+            {!isCafeStatusKnown && (
+              <div className="mt-2.5 p-3 rounded-2xl bg-gray-50 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-700 flex items-start space-x-2.5 flex-shrink-0 animate-in fade-in">
+                <Clock className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5" />
+                <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">
+                  <strong>{cafeStatusText}</strong> Ordering opens once we confirm today&apos;s hours. Your cart is saved.
+                  {cafeNextStatusText ? ` ${cafeNextStatusText}.` : ''}
+                </p>
+              </div>
+            )}
+            {isCafeStatusKnown && !isCafeOpen && (
               <div className="mt-2.5 p-3 rounded-2xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/30 border border-amber-300 dark:border-amber-800/60 flex items-start space-x-2.5 flex-shrink-0 animate-in fade-in">
                 <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
                 <div className="text-xs">
@@ -1113,6 +1141,7 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
                             type="text"
                             value={upiRefId}
                             onChange={(e) => setUpiRefId(e.target.value)}
+                            maxLength={40}
                             placeholder="e.g. 12-digit transaction number"
                             className="w-full px-2.5 py-1 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-800 text-xs text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
                           />
@@ -1166,7 +1195,7 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
                 ) : !isCafeOpen ? (
                   <>
                     <Clock className="w-4 h-4" />
-                    <span>Café Closed • Cart Saved</span>
+                    <span>{isCafeStatusKnown ? 'Café Closed • Cart Saved' : 'Checking Hours…'}</span>
                   </>
                 ) : paymentMode === 'upi' ? (
                   <>

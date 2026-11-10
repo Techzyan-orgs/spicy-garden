@@ -117,7 +117,12 @@ export default function LocationContact() {
               )}
 
               <div className="space-y-1.5 text-xs">
-                {(liveData?.operations?.schedule || RESTAURANT_DATA.timings.schedule).map((item: any) => {
+                {!liveData?.operations?.schedule?.length && (
+                  <p className="py-2 px-2.5 text-gray-500 dark:text-gray-400">
+                    {status.statusText}{status.nextStatusText ? ` – ${status.nextStatusText}` : ''}
+                  </p>
+                )}
+                {(liveData?.operations?.schedule || []).map((item) => {
                   const isToday = status.currentDayName === item.day;
                   const isClosedDay = item.isOpen === false;
                   return (
@@ -147,9 +152,11 @@ export default function LocationContact() {
                 })}
               </div>
 
-              <p className="mt-3 text-[11px] text-gray-500 dark:text-gray-400 italic">
-                {liveData?.operations?.kitchenClosesDisplay || RESTAURANT_DATA.timings.kitchenClosesDisplay}
-              </p>
+              {liveData?.operations?.kitchenClosesDisplay && (
+                <p className="mt-3 text-[11px] text-gray-500 dark:text-gray-400 italic">
+                  {liveData.operations.kitchenClosesDisplay}
+                </p>
+              )}
             </div>
 
             {/* Social Link */}

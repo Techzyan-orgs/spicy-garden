@@ -2,8 +2,12 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { LiveOperationsStatus, ClosureNotice } from '@/types/operations';
-import { getRestaurantCurrentStatus } from '@/data/restaurantData';
 
+/**
+ * Café hours / open status. The database (via /api/operations) is the only source:
+ * there are no built-in hours. Until live status is known, `isStatusKnown` is false,
+ * `isOpen` is false (ordering stays disabled) and neutral "checking" texts are shown.
+ */
 interface CafeOperationsContextValue {
   isOpen: boolean;
   statusText: string;
@@ -24,18 +28,48 @@ interface CafeOperationsContextValue {
     currentDayName: string;
     dayOfWeek: number;
   };
+  /** True once live status has been loaded from the server at least once. */
+  isStatusKnown: boolean;
   isLoading: boolean;
+  /** Set when the latest load failed and no live status is available. */
+  error: string | null;
   refetchOperations: () => Promise<void>;
+}
+
+const NEUTRAL_BADGE = 'bg-gray-500/15 text-gray-400 border-gray-500/30';
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function istDay(): { dayOfWeek: number; currentDayName: string } {
+  const now = new Date();
+  const ist = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 5.5 * 3600000);
+  const dayOfWeek = ist.getDay();
+  return { dayOfWeek, currentDayName: DAY_NAMES[dayOfWeek] };
+}
+
+function unknownStatus(error: string | null) {
+  return {
+    isOpen: false,
+    statusText: error ? 'Hours unavailable' : 'Checking hours…',
+    nextStatusText: error ? 'Please call us to order' : '',
+    badgeColorClass: NEUTRAL_BADGE,
+    todayHoursDisplay: '',
+    ...istDay(),
+  };
 }
 
 const CafeOperationsContext = createContext<CafeOperationsContextValue | undefined>(undefined);
 
+const RETRY_MIN_MS = 5_000;
+const RETRY_MAX_MS = 60_000;
+
 export function CafeOperationsProvider({ children }: { children: React.ReactNode }) {
-  const defaultStatus = getRestaurantCurrentStatus();
   const [rawStatus, setRawStatus] = useState<LiveOperationsStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const isFetchingRef = useRef(false);
   const lastFetchTimeRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryDelayRef = useRef(RETRY_MIN_MS);
 
   const fetchOperations = useCallback(async (force = false) => {
     const now = Date.now();
@@ -43,20 +77,35 @@ export function CafeOperationsProvider({ children }: { children: React.ReactNode
     if (!force && now - lastFetchTimeRef.current < 5000) return;
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    let ok = false;
     try {
-      const res = await fetch('/api/operations');
+      const res = await fetch('/api/operations', { cache: 'no-store' });
       if (res.ok) {
         const data: LiveOperationsStatus = await res.json();
-        if (data && data.statusText) {
+        if (data && typeof data.statusText === 'string') {
           setRawStatus(data);
+          setError(null);
           lastFetchTimeRef.current = Date.now();
+          retryDelayRef.current = RETRY_MIN_MS;
+          ok = true;
         }
       }
-    } catch (e) {
-      // Quiet failover to preserve current state
+      if (!ok) setError('Opening hours are temporarily unavailable.');
+    } catch {
+      setError('Opening hours are temporarily unavailable.');
     } finally {
       isFetchingRef.current = false;
       setIsLoading(false);
+      if (!ok) {
+        // Retry with exponential backoff until the server answers.
+        const delay = retryDelayRef.current;
+        retryDelayRef.current = Math.min(delay * 2, RETRY_MAX_MS);
+        retryTimerRef.current = setTimeout(() => fetchOperations(true), delay);
+      }
     }
   }, []);
 
@@ -96,6 +145,7 @@ export function CafeOperationsProvider({ children }: { children: React.ReactNode
 
     return () => {
       clearInterval(interval);
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       if (channel) channel.close();
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -103,37 +153,32 @@ export function CafeOperationsProvider({ children }: { children: React.ReactNode
     };
   }, [fetchOperations]);
 
-  const isOpen = rawStatus?.isOpen ?? defaultStatus.isOpen;
-  const statusText = rawStatus?.statusText ?? defaultStatus.statusText;
-  const nextStatusText = rawStatus?.nextStatusText ?? defaultStatus.nextStatusText;
-  const badgeColorClass = rawStatus?.badgeColorClass ?? defaultStatus.badgeColorClass;
-  const todayHoursDisplay = rawStatus?.todayHoursDisplay ?? defaultStatus.todayHoursDisplay;
-  const currentDayName = rawStatus?.currentDayName ?? defaultStatus.currentDayName;
-  const dayOfWeek = rawStatus?.dayOfWeek ?? defaultStatus.dayOfWeek;
+  // Once known, keep showing the last live status even if a later refresh fails.
+  const isStatusKnown = rawStatus !== null;
+  const status = rawStatus
+    ? {
+        isOpen: rawStatus.isOpen,
+        statusText: rawStatus.statusText,
+        nextStatusText: rawStatus.nextStatusText,
+        badgeColorClass: rawStatus.badgeColorClass,
+        todayHoursDisplay: rawStatus.todayHoursDisplay,
+        currentDayName: rawStatus.currentDayName,
+        dayOfWeek: rawStatus.dayOfWeek,
+      }
+    : unknownStatus(isLoading ? null : error);
+
   const isNoticeActive = Boolean(rawStatus?.isNoticeActive && rawStatus?.activeNotice?.enabled);
   const activeNotice = rawStatus?.activeNotice ?? null;
 
   const value: CafeOperationsContextValue = {
-    isOpen,
-    statusText,
-    nextStatusText,
-    badgeColorClass,
-    todayHoursDisplay,
-    currentDayName,
-    dayOfWeek,
+    ...status,
     isNoticeActive,
     activeNotice,
     rawStatus,
-    status: {
-      isOpen,
-      statusText,
-      nextStatusText,
-      badgeColorClass,
-      todayHoursDisplay,
-      currentDayName,
-      dayOfWeek,
-    },
+    status,
+    isStatusKnown,
     isLoading,
+    error: isStatusKnown ? null : error,
     refetchOperations: () => fetchOperations(true),
   };
 
@@ -147,20 +192,16 @@ export function CafeOperationsProvider({ children }: { children: React.ReactNode
 export function useCafeOperations(): CafeOperationsContextValue {
   const context = useContext(CafeOperationsContext);
   if (!context) {
-    const defaultStatus = getRestaurantCurrentStatus();
+    const status = unknownStatus(null);
     return {
-      isOpen: defaultStatus.isOpen,
-      statusText: defaultStatus.statusText,
-      nextStatusText: defaultStatus.nextStatusText,
-      badgeColorClass: defaultStatus.badgeColorClass,
-      todayHoursDisplay: defaultStatus.todayHoursDisplay,
-      currentDayName: defaultStatus.currentDayName,
-      dayOfWeek: defaultStatus.dayOfWeek,
+      ...status,
       isNoticeActive: false,
       activeNotice: null,
       rawStatus: null,
-      status: defaultStatus,
-      isLoading: false,
+      status,
+      isStatusKnown: false,
+      isLoading: true,
+      error: null,
       refetchOperations: async () => {},
     };
   }
