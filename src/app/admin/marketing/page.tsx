@@ -25,7 +25,7 @@ import {
   Check,
   Copy,
 } from 'lucide-react';
-import { maskPhoneNumber } from '@/lib/crypto';
+import { maskPhoneNumber } from '@/lib/maskPhone';
 
 interface Subscriber {
   id: string;
@@ -86,6 +86,12 @@ export default function AdminMarketingPage() {
   const [campaignTitle, setCampaignTitle] = useState<string>('Weekend Pizza Bonanza');
   const [messageText, setMessageText] = useState<string>(PRESET_CAMPAIGNS[0].text);
   const [testPhoneNumber, setTestPhoneNumber] = useState<string>('');
+  // Approved Meta templates reach every opted-in customer; free text only reaches
+  // customers who messaged you in the last 24 hours.
+  const [broadcastMode, setBroadcastMode] = useState<'template' | 'text'>('template');
+  const [templateName, setTemplateName] = useState<string>('');
+  const [templateLanguage, setTemplateLanguage] = useState<string>('en');
+  const [templateParamsText, setTemplateParamsText] = useState<string>('');
   const [isSendingTest, setIsSendingTest] = useState<boolean>(false);
   const [isBroadcasting, setIsBroadcasting] = useState<boolean>(false);
   const [broadcastProgress, setBroadcastProgress] = useState<string | null>(null);
@@ -134,6 +140,21 @@ export default function AdminMarketingPage() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const broadcastContent = () =>
+    broadcastMode === 'template'
+      ? {
+          mode: 'template' as const,
+          templateName: templateName.trim(),
+          templateLanguage: templateLanguage.trim() || 'en',
+          templateParams: templateParamsText
+            .split('\n')
+            .map((p) => p.trim())
+            .filter(Boolean),
+        }
+      : { mode: 'text' as const, messageText };
+
+  const hasBroadcastContent = broadcastMode === 'template' ? Boolean(templateName.trim()) : Boolean(messageText.trim());
+
   const handleSendTest = async () => {
     setFeedback(null);
     const cleanTest = testPhoneNumber.replace(/\D/g, '').slice(-10);
@@ -148,8 +169,8 @@ export default function AdminMarketingPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...broadcastContent(),
           campaignTitle: `${campaignTitle} (Test)`,
-          messageText,
           target: 'test',
           testPhone: cleanTest,
         }),
@@ -174,25 +195,31 @@ export default function AdminMarketingPage() {
     setBroadcastProgress(`Dispatching to ${subscribers.length} customers...`);
     setFeedback(null);
 
+    // The server sends one batch per request; keep calling until every subscriber is processed.
+    let cursor: number | null = 0;
+    let sent = 0;
+    let failed = 0;
     try {
-      const res = await fetch('/api/admin/whatsapp/broadcast', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          campaignTitle,
-          messageText,
-          target: 'all',
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Broadcast execution failed.');
+      while (cursor !== null) {
+        const res: Response = await fetch('/api/admin/whatsapp/broadcast', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...broadcastContent(), campaignTitle, target: 'all', cursor }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          const progress = sent + failed > 0 ? ` (stopped after ${sent} sent, ${failed} failed)` : '';
+          throw new Error(`${data.error || 'Broadcast execution failed.'}${progress}`);
+        }
+        sent += data.sentCount;
+        failed += data.failedCount;
+        cursor = data.nextCursor;
+        setBroadcastProgress(`Sent ${data.processed} of ${data.total}...`);
       }
 
       setFeedback({
         type: 'success',
-        message: `Campaign Broadcast Complete! Sent: ${data.sentCount}, Failed: ${data.failedCount}`,
+        message: `Campaign Broadcast Complete! Sent: ${sent}, Failed: ${failed}`,
       });
       fetchSubscribers();
     } catch (err: any) {
@@ -504,7 +531,59 @@ export default function AdminMarketingPage() {
               />
             </div>
 
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setBroadcastMode('template')}
+                className={`px-3 py-1.5 rounded-xl border ${broadcastMode === 'template' ? 'bg-emerald-600 text-white border-emerald-600' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}
+              >
+                Approved template (recommended)
+              </button>
+              <button
+                type="button"
+                onClick={() => setBroadcastMode('text')}
+                className={`px-3 py-1.5 rounded-xl border ${broadcastMode === 'text' ? 'bg-emerald-600 text-white border-emerald-600' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}
+              >
+                Free text
+              </button>
+            </div>
+
+            {broadcastMode === 'template' ? (
+              <div className="space-y-2">
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
+                  Marketing messages must use a template approved in Meta WhatsApp Manager. Enter its exact name,
+                  language code and the values for its {'{{1}}'}, {'{{2}}'}… placeholders (one per line).
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="text"
+                    value={templateName}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                    placeholder="template_name"
+                    className="col-span-2 px-3 py-2 rounded-xl text-xs font-mono bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white"
+                  />
+                  <input
+                    type="text"
+                    value={templateLanguage}
+                    onChange={(e) => setTemplateLanguage(e.target.value)}
+                    placeholder="en"
+                    className="px-3 py-2 rounded-xl text-xs font-mono bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white"
+                  />
+                </div>
+                <textarea
+                  rows={3}
+                  value={templateParamsText}
+                  onChange={(e) => setTemplateParamsText(e.target.value)}
+                  placeholder={'Value for {{1}}\nValue for {{2}}'}
+                  className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white"
+                />
+              </div>
+            ) : (
             <div>
+              <p className="mb-2 p-2 rounded-xl text-[11px] bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50">
+                WhatsApp only delivers free text to customers who messaged you in the last 24 hours. Others will fail.
+                An unsubscribe link is added automatically.
+              </p>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-bold text-gray-700 dark:text-gray-300">
                   Message Content (WhatsApp Formatted)
@@ -519,6 +598,7 @@ export default function AdminMarketingPage() {
                 className="w-full px-3.5 py-2.5 rounded-xl text-xs font-sans bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 leading-relaxed font-mono"
               />
             </div>
+            )}
           </div>
 
           {/* Action & Test Send Column */}
@@ -556,7 +636,7 @@ export default function AdminMarketingPage() {
               <button
                 type="button"
                 onClick={() => setShowConfirmModal(true)}
-                disabled={isBroadcasting || subscribers.length === 0 || !messageText.trim()}
+                disabled={isBroadcasting || subscribers.length === 0 || !hasBroadcastContent}
                 className="w-full py-3 rounded-2xl text-xs font-black uppercase tracking-wider text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-md shadow-emerald-600/30 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center space-x-2 cursor-pointer"
               >
                 {isBroadcasting ? (

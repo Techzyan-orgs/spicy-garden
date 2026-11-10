@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { RESTAURANT_DATA } from "@/data/restaurantData";
+import { WHATSAPP_CONSENT_TEXT } from "@/lib/consentText";
 import {
   X,
   Calendar,
@@ -197,6 +198,8 @@ export default function ReservationModal({ isOpen, onClose, defaultOccasion }: R
   // Form input states
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  // WhatsApp offers opt-in: unticked by default, only sent when the guest ticks it.
+  const [whatsappOptIn, setWhatsappOptIn] = useState(false);
   const [occasion, setOccasion] = useState(defaultOccasion || "Birthday Celebration");
   const [guests, setGuests] = useState("4");
   const [date, setDate] = useState("");
@@ -508,6 +511,7 @@ export default function ReservationModal({ isOpen, onClose, defaultOccasion }: R
           customerPhone: cleanPhone,
           orderType: 'reservation',
           source: celebrationSource,
+          whatsappOptIn,
           notes: reservationNotes,
           items: [
             {
@@ -539,31 +543,7 @@ export default function ReservationModal({ isOpen, onClose, defaultOccasion }: R
         window.dispatchEvent(new CustomEvent('sg_new_order', { detail: data.order }));
       }
 
-      // Persist interested customer's WhatsApp contact into Firebase Realtime Database
-      try {
-        if (cleanPhone.length === 10) {
-          fetch('/api/whatsapp/consent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              phone: cleanPhone,
-              customerName: name.trim() || undefined,
-              source: 'table_reservation',
-              metadata: {
-                interestScore: 90,
-                occasion,
-                guests,
-                reservationDate: formattedDate,
-                preferredTime: time,
-                bookingRef: orderNumber,
-                submittedAt: new Date().toISOString(),
-              },
-            }),
-          }).catch((err) => {
-            console.warn('[Reservation] Could not save contact to Firebase:', err);
-          });
-        }
-      } catch {}
+      // WhatsApp offers sign-up happens server-side only when the guest ticked the opt-in box.
 
       // Prepare optional WhatsApp URL for customer convenience (does NOT open automatically)
       const message = `Hello ${RESTAURANT_DATA.brand.shortName}! I submitted a Celebration Booking (#SG-${orderNumber || 'PENDING'}):
@@ -803,6 +783,15 @@ ${notes.trim() ? `• Special Requests: ${notes.trim()}` : ""}`;
                   ) : (
                     <p className="mt-1 text-[11px] text-gray-400">10-digit mobile number starting with 6-9</p>
                   )}
+                  <label className="mt-2 flex items-start gap-2 text-[11px] text-gray-600 dark:text-gray-400 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={whatsappOptIn}
+                      onChange={(e) => setWhatsappOptIn(e.target.checked)}
+                      className="mt-0.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span>{WHATSAPP_CONSENT_TEXT} (Optional)</span>
+                  </label>
                 </div>
 
                 {/* Occasion Dropdown */}

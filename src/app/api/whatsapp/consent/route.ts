@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
       customerName,
       source: source || 'behavioral_interest_prompt',
       interestScore: metadata?.interestScore,
+      consent: { source: source || 'behavioral_interest_prompt' },
     });
 
     return NextResponse.json({

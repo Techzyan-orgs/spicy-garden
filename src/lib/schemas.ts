@@ -53,6 +53,8 @@ export const createOrderSchema = z.object({
   /** Display label only (e.g. "Celebration: Birthday (4 Guests…)"). Never used for authorisation. */
   source: optionalText(160),
   paymentMode: z.enum(['cash', 'upi']).optional(),
+  /** Explicit, unticked-by-default opt-in to WhatsApp offers. */
+  whatsappOptIn: z.boolean().optional(),
   upiTransactionId: optionalText(35).refine(
     (v) => v === undefined || /^[A-Za-z0-9]{6,35}$/.test(v),
     'UPI reference must be 6–35 letters or digits'
@@ -70,6 +72,7 @@ export const orderActionSchema = z.object({
 
 export const consentSchema = z.object({
   phone: z.string().max(20),
+  consentGiven: z.literal(true, { errorMap: () => ({ message: 'explicit consent is required' }) }),
   customerName: optionalText(100),
   source: z
     .string()
@@ -82,6 +85,10 @@ export const consentSchema = z.object({
     })
     .passthrough()
     .optional(),
+});
+
+export const unsubscribeSchema = z.object({
+  phone: z.string().max(20),
 });
 
 export const loginSchema = z.object({

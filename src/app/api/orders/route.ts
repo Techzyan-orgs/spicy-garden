@@ -13,11 +13,13 @@ export const runtime = 'nodejs';
  * Admin order listing / acknowledge / delete live at /api/admin/orders.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { randomInt, randomUUID } from 'crypto';
 import { DbOrder, OrderStatus, PaymentStatus, PaymentMode } from '@/types/restaurant';
 import { readMenuFromStore } from '@/lib/menuStore';
 import { readOrdersFromStore, saveOrderToStore } from '@/lib/ordersStore';
 import { publishOrderToAbly } from '@/lib/ably';
-import { sendWhatsAppTextMessage, isWhatsAppConfigured } from '@/lib/whatsapp';
+import { sendWhatsAppTemplateMessage, getConfirmationTemplate, templateBodyParams } from '@/lib/whatsapp';
+import { consumeRateLimit } from '@/lib/rateLimit';
 import { addOrUpdateSubscriber } from '@/lib/whatsappStore';
 import { isAdminRequest } from '@/lib/authServer';
 import { readOperationsFromStore, calculateLiveOperationsStatus } from '@/lib/operationsStore';
@@ -160,11 +162,12 @@ export async function POST(req: NextRequest) {
 
     // 6. Build the order record.
     const activeOrderNums = new Set((await readOrdersFromStore()).map((o) => o.order_number).filter(Boolean));
-    let orderNumber = Math.floor(1000 + Math.random() * 9000);
+    // 6-digit order numbers (fewer collisions); ids from a CSPRNG.
+    let orderNumber = randomInt(100000, 1000000);
     for (let attempts = 0; activeOrderNums.has(orderNumber) && attempts < 50; attempts++) {
-      orderNumber = Math.floor(1000 + Math.random() * 9000);
+      orderNumber = randomInt(100000, 1000000);
     }
-    const orderId = `ord_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const orderId = `ord_${randomUUID().replace(/-/g, '')}`;
     const createdAt = new Date().toISOString();
 
     // Public clients can never mark anything as paid/confirmed — including reservations.
@@ -201,15 +204,17 @@ export async function POST(req: NextRequest) {
 
     await saveOrderToStore(orderRecord);
 
-    // Store interested customer's WhatsApp contact (consent handling is reworked in Phase 5).
-    if (phone !== WALK_IN_PHONE) {
+    // WhatsApp marketing list: ONLY with the customer's explicit opt-in (unticked checkbox).
+    if (body.whatsappOptIn === true && phone !== WALK_IN_PHONE) {
+      const consentSource = isReservation ? 'table_reservation' : 'order_checkout';
       addOrUpdateSubscriber({
         phone,
         customerName: resolvedName,
-        source: isReservation ? 'table_reservation' : 'online_order',
+        source: consentSource,
         interestScore: isReservation ? 90 : 100,
+        consent: { source: consentSource },
       }).catch((err) => {
-        console.warn('[API Orders] Could not store customer WhatsApp contact:', err instanceof Error ? err.message : err);
+        console.warn('[API Orders] Could not store WhatsApp opt-in:', err instanceof Error ? err.message : err);
       });
     }
 
@@ -218,9 +223,9 @@ export async function POST(req: NextRequest) {
       console.warn('[API Orders] Ably publish notice:', err instanceof Error ? err.message : err);
     });
 
-    // Optional WhatsApp confirmation
-    if (isWhatsAppConfigured() && phone !== WALK_IN_PHONE) {
-      sendWhatsAppTextMessage(phone, confirmationMessage(orderRecord, validatedItems, body.orderType, isReservation)).catch(() => {});
+    // Transactional WhatsApp confirmation (approved template, at most 1 per phone per 10 minutes).
+    if (phone !== WALK_IN_PHONE) {
+      void sendConfirmation(orderRecord, isReservation);
     }
 
     // Replay payload contains no customer PII (it is stored briefly in the database).
@@ -250,23 +255,23 @@ async function failAfterClaim(claimedKey: string | null, response: NextResponse)
   return response;
 }
 
-function confirmationMessage(
-  order: DbOrder,
-  items: ValidatedItem[],
-  orderType: string | undefined,
-  isReservation: boolean
-): string {
-  if (isReservation) {
-    return `Hello ${order.customer_name}! Thank you for your celebration reservation request with The Spicy Garden - Cafe & Bistro.\n\nBooking Ref: #SG-${order.order_number}\n\n${order.notes || order.source}\n\nOur restaurant team has received your request and will call or message you to confirm!`;
+/** Sends the order/reservation confirmation template; never throws. */
+async function sendConfirmation(order: DbOrder, isReservation: boolean): Promise<void> {
+  try {
+    const template = getConfirmationTemplate(isReservation ? 'reservation' : 'order');
+    if (!template) return;
+    const limit = await consumeRateLimit('waConfirm', order.customer_phone);
+    if (!limit.allowed) return;
+    const ref = `#SG-${order.order_number}`;
+    const third = isReservation ? (order.notes || order.source || 'Celebration booking').slice(0, 200) : `₹${order.total}`;
+    const res = await sendWhatsAppTemplateMessage(
+      order.customer_phone,
+      template.name,
+      template.language,
+      templateBodyParams([order.customer_name, ref, third])
+    );
+    if (!res.success) console.warn('[API Orders] WhatsApp confirmation not delivered:', res.error);
+  } catch (err) {
+    console.warn('[API Orders] WhatsApp confirmation error:', err instanceof Error ? err.message : err);
   }
-  const itemSummary = items
-    .map((i) => `${i.quantity}x ${i.name} (${i.variant || 'Standard'}) - ₹${i.totalPrice}`)
-    .join('\n');
-  const serviceLine =
-    orderType === 'delivery' && order.delivery_address
-      ? `\n📍 Delivery To: ${order.delivery_address}`
-      : orderType === 'dine-in'
-      ? `\n🍽️ Service: Dine-In`
-      : `\n🛍️ Service: Takeaway Pickup`;
-  return `Hello ${order.customer_name}! Thank you for ordering from The Spicy Garden - Cafe & Bistro.\n\nOrder Ref: #SG-${order.order_number}\n\nItems:\n${itemSummary}\n\nTotal: ₹${order.total}${serviceLine}\n\nOur kitchen has received your order!`;
 }

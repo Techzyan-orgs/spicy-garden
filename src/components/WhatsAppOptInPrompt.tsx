@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { trackEvent, getCurrentInterestScore } from '@/lib/analytics';
 import { MessageCircle, X, Bell, CheckCircle2, Loader2, ArrowRight } from 'lucide-react';
+import { WHATSAPP_CONSENT_TEXT, UNSUBSCRIBE_PATH } from '@/lib/consentText';
 
 function isOptInEligible(): boolean {
   if (typeof window === 'undefined') return false;
@@ -137,7 +138,6 @@ export default function WhatsAppOptInPrompt() {
           source: 'behavioral_interest_prompt',
           metadata: {
             interestScore: getCurrentInterestScore(),
-            userAgent: navigator.userAgent,
             consentedAt: new Date().toISOString(),
           },
         }),
@@ -255,7 +255,8 @@ export default function WhatsAppOptInPrompt() {
             </div>
 
             <p className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
-              By enabling, you consent to receive occasional offers from The Spicy Garden. Never spammed. Reply STOP anytime.
+              {WHATSAPP_CONSENT_TEXT}{' '}
+              <a href={UNSUBSCRIBE_PATH} className="underline">Unsubscribe here</a>.
             </p>
 
             <div className="pt-1 flex items-center justify-end space-x-2">

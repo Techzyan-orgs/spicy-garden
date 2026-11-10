@@ -289,7 +289,7 @@ export default function ManualOrderModal({
       // Constructed DbOrder object for instantaneous optimistic UI update
       const createdOrder: DbOrder = data.order || {
         id: data.orderId,
-        order_number: Number(String(data.orderNumber).replace(/\D/g, '')) || Math.floor(1000 + Math.random() * 9000),
+        order_number: Number(String(data.orderNumber).replace(/\D/g, '')) || 0,
         customer_id: null,
         customer_name: payload.customerName,
         customer_phone: payload.customerPhone,
@@ -315,9 +315,6 @@ export default function ManualOrderModal({
           const bc = new BroadcastChannel('sg_orders_channel');
           bc.postMessage({ type: 'NEW_ORDER', order: createdOrder });
           bc.close();
-        } catch (e) {}
-        try {
-          localStorage.setItem('sg_last_order_event', JSON.stringify(createdOrder));
         } catch (e) {}
       }
 

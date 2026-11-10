@@ -64,6 +64,18 @@ export function getDataEncryptionKey(): string {
   return key;
 }
 
+/**
+ * HMAC key for the subscriber phone index (subscribers_by_hash). A keyed hash
+ * cannot be reversed by brute-forcing the ~10^10 mobile-number space.
+ */
+export function getPhoneHashKey(): string {
+  const key = requireSecret('PHONE_HASH_KEY');
+  if (key === readVar('ADMIN_SESSION_SECRET') || key === readVar('DATA_ENCRYPTION_KEY')) {
+    throw new ConfigError('PHONE_HASH_KEY must be different from ADMIN_SESSION_SECRET and DATA_ENCRYPTION_KEY.');
+  }
+  return key;
+}
+
 /** Owner login email (lower-cased). */
 export function getOwnerEmail(): string {
   const email = requireVar('OWNER_EMAIL').toLowerCase();

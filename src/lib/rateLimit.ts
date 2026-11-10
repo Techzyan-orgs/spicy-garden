@@ -41,6 +41,10 @@ export const RATE_LIMITS = {
   consent: { limit: 5, windowMs: 15 * 60_000 },
   /** Reverse geocoding per IP. */
   geocode: { limit: 15, windowMs: 60_000 },
+  /** Unsubscribe requests per IP. */
+  unsubscribe: { limit: 5, windowMs: 15 * 60_000 },
+  /** WhatsApp confirmations per recipient phone (stops message-cost abuse). */
+  waConfirm: { limit: 1, windowMs: 10 * 60_000 },
 } satisfies Record<string, RateLimitRule>;
 
 export type RateLimitBucket = keyof typeof RATE_LIMITS;

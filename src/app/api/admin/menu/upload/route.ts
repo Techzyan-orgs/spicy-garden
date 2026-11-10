@@ -1,143 +1,95 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { requireAdmin } from '@/lib/apiGuard';
+import crypto from 'crypto';
+import sharp from 'sharp';
+import { requireAdmin, jsonError } from '@/lib/apiGuard';
 import { uploadImageToCloudinary, isCloudinaryConfigured } from '@/lib/cloudinary';
 
 export const runtime = 'nodejs';
-
 export const dynamic = 'force-dynamic';
 
-
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+const MAX_DIMENSION = 2000; // px, longest side
+const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
+/**
+ * POST /api/admin/menu/upload (multipart, field "file")
+ *
+ * Accepts JPEG/PNG/WebP only (checked by MIME type AND magic bytes), then
+ * re-encodes with sharp: strips EXIF/GPS and other metadata, applies the
+ * orientation, caps the size, and outputs WebP.
+ *
+ * Production stores images on Cloudinary only (503 when not configured).
+ * Development without Cloudinary writes to public/uploads/ (git-ignored).
+ */
 export async function POST(req: NextRequest) {
   const denied = await requireAdmin(req);
   if (denied) return denied;
 
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction && !isCloudinaryConfigured()) {
+    return jsonError(503, 'Image uploads are unavailable: Cloudinary is not configured on the server.');
+  }
+
   try {
     const formData = await req.formData();
-    const file = formData.get('file') as File | null;
+    const file = formData.get('file');
+    if (!(file instanceof File)) return jsonError(400, 'No image file provided.');
 
-    if (!file) {
-      return NextResponse.json({ error: 'No image file provided.' }, { status: 400 });
-    }
-
-    // Validate MIME type strictly to raster images (rejecting SVGs to prevent Stored XSS)
-    const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
     if (!file.type || !ALLOWED_MIME_TYPES.includes(file.type.toLowerCase())) {
-      return NextResponse.json(
-        { error: 'Invalid file format. Only JPEG, PNG, and WebP raster images are permitted.' },
-        { status: 400 }
-      );
+      return jsonError(400, 'Invalid file format. Only JPEG, PNG, and WebP images are permitted.');
     }
+    if (file.size > MAX_FILE_SIZE) return jsonError(400, 'Image size exceeds the 5 MB limit.');
 
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json(
-        { error: 'Image size exceeds maximum limit of 5 MB.' },
-        { status: 400 }
-      );
-    }
+    const input = Buffer.from(await file.arrayBuffer());
 
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-
-    // Validate binary magic bytes to prevent MIME-type spoofing
-    const isJpeg = buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
-    const isPng = buffer.length > 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+    // Magic-byte check (prevents MIME-type spoofing)
+    const isJpeg = input.length > 3 && input[0] === 0xff && input[1] === 0xd8 && input[2] === 0xff;
+    const isPng = input.length > 4 && input[0] === 0x89 && input[1] === 0x50 && input[2] === 0x4e && input[3] === 0x47;
     const isWebp =
-      buffer.length > 12 &&
-      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 && // "RIFF"
-      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50; // "WEBP"
-
+      input.length > 12 &&
+      input.toString('ascii', 0, 4) === 'RIFF' &&
+      input.toString('ascii', 8, 12) === 'WEBP';
     if (!isJpeg && !isPng && !isWebp) {
-      return NextResponse.json(
-        { error: 'Invalid or corrupted image content. Magic bytes do not match a genuine JPEG, PNG, or WebP image.' },
-        { status: 400 }
-      );
+      return jsonError(400, 'Invalid or corrupted image: the content is not a genuine JPEG, PNG, or WebP image.');
     }
 
-    // 1. Primary: Upload to Cloudinary CDN
-    let cloudinaryError: string | null = null;
+    // Re-encode: drops all metadata (EXIF incl. GPS) because withMetadata() is not used.
+    let output: Buffer;
+    try {
+      output = await sharp(input, { limitInputPixels: 40_000_000 })
+        .rotate() // apply EXIF orientation before it is stripped
+        .resize({ width: MAX_DIMENSION, height: MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 82 })
+        .toBuffer();
+    } catch {
+      return jsonError(400, 'The image could not be processed. Please try a different file.');
+    }
+
     if (isCloudinaryConfigured()) {
-      try {
-        const uploadResult = await uploadImageToCloudinary(buffer, {
-          folder: 'spicy_garden_menu',
-        });
-
-        if (uploadResult.success && uploadResult.url) {
-          return NextResponse.json({
-            success: true,
-            publicUrl: uploadResult.url,
-            filename: uploadResult.publicId,
-            source: 'cloudinary',
-          });
-        }
-        cloudinaryError = uploadResult.error || 'Cloudinary upload returned failure.';
-        console.warn('[API Upload] Cloudinary upload notice:', cloudinaryError);
-      } catch (cErr: any) {
-        cloudinaryError = cErr?.message || 'Cloudinary upload exception.';
-        console.warn('[API Upload] Cloudinary upload exception:', cloudinaryError);
+      const result = await uploadImageToCloudinary(output, { folder: 'spicy_garden_menu' });
+      if (result.success && result.url) {
+        return NextResponse.json({ success: true, publicUrl: result.url, filename: result.publicId, source: 'cloudinary' });
       }
+      console.error('[API Upload] Cloudinary upload failed:', result.error);
+      return jsonError(502, 'The image host rejected the upload. Please try again.');
     }
 
-    // 2. Dev Fallback: Local filesystem (Only when running locally in development)
-    if (process.env.NODE_ENV !== 'production') {
-      const rawExt = file.name.split('.').pop()?.toLowerCase();
-      const safeExt = rawExt && ['jpg', 'jpeg', 'png', 'webp'].includes(rawExt) ? rawExt : 'webp';
-      const filename = `dish_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${safeExt}`;
-      const publicUrl = `/uploads/${filename}`;
-
-      try {
-        const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-        if (!fs.existsSync(uploadsDir)) {
-          fs.mkdirSync(uploadsDir, { recursive: true });
-        }
-        const filePath = path.join(uploadsDir, filename);
-        fs.writeFileSync(filePath, buffer);
-
-        return NextResponse.json({
-          success: true,
-          publicUrl,
-          filename,
-          source: 'local_dev_fallback',
-          warning: cloudinaryError ? `Cloudinary notice: ${cloudinaryError}` : undefined,
-        });
-      } catch (localErr) {
-        console.warn('[API Upload] Local filesystem write failed:', localErr);
-      }
-    }
-
-    // 3. Fallback: Only allow micro-thumbnails (<64 KB) as embedded data URLs to protect Vercel 4.5 MB limit and page speed
-    const MAX_EMBEDDED_BYTES = 64 * 1024;
-    if (buffer.length <= MAX_EMBEDDED_BYTES) {
-      const mimeType = isWebp ? 'image/webp' : isPng ? 'image/png' : 'image/jpeg';
-      const dataUrl = `data:${mimeType};base64,${buffer.toString('base64')}`;
-      return NextResponse.json({
-        success: true,
-        publicUrl: dataUrl,
-        filename: `embedded_${Date.now()}`,
-        source: 'embedded_fallback',
-        warning: cloudinaryError
-          ? `Uploaded as embedded image thumbnail. (Cloudinary: ${cloudinaryError})`
-          : undefined,
-      });
-    }
-
-    return NextResponse.json(
-      {
-        error:
-          cloudinaryError ||
-          'Cloudinary image upload failed. Please verify CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in your Vercel project environment variables.',
-      },
-      { status: 502 }
-    );
-  } catch (error: any) {
+    // Development only: local file (public/uploads is git-ignored).
+    const filename = `dish_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.webp`;
+    const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    fs.writeFileSync(path.join(uploadsDir, filename), output);
+    return NextResponse.json({
+      success: true,
+      publicUrl: `/uploads/${filename}`,
+      filename,
+      source: 'local_dev',
+      warning: 'Saved locally for development. Configure Cloudinary before deploying.',
+    });
+  } catch (error) {
     console.error('[API Upload] Unexpected error:', error);
-    return NextResponse.json(
-      { error: 'Failed to upload image.' },
-      { status: 500 }
-    );
+    return jsonError(500, 'Failed to upload image.');
   }
 }

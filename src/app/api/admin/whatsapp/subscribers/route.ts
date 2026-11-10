@@ -64,6 +64,8 @@ export async function POST(req: NextRequest) {
       customerName: customerName || undefined,
       source: source || 'manual_admin_entry',
       interestScore: 100, // Explicitly added by owner
+      // The owner attests the customer agreed to receive WhatsApp offers.
+      consent: { source: 'admin_manual', text: 'Added by the owner after the customer agreed to receive WhatsApp offers.' },
     });
 
     return NextResponse.json({ success: true, subscriber: saved });

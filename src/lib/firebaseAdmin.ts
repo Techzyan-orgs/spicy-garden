@@ -142,8 +142,15 @@ async function withTimeout<T>(op: string, path: string, fn: () => Promise<T>, ti
   }
 }
 
+function nonRootPath(path: string): string {
+  const p = normalizePath(path);
+  if (p === '') throw new InvalidKeyError('Refusing to read, replace or delete the database root.');
+  return p;
+}
+
 function normalizePath(path: string): string {
   const clean = path.replace(/^\/+|\/+$/g, '');
+  if (clean === '') return ''; // database root (used for atomic multi-path updates)
   if (clean.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) {
     throw new InvalidKeyError(`Invalid database path: ${path}`);
   }
@@ -152,7 +159,7 @@ function normalizePath(path: string): string {
 
 /** Reads a node. Returns null only when the node does not exist; throws on any failure. */
 export async function dbGet<T>(path: string): Promise<T | null> {
-  const p = normalizePath(path);
+  const p = nonRootPath(path);
   return withTimeout('GET', p, async () => {
     const snap = await getDb().ref(p).once('value');
     return snap.exists() ? (snap.val() as T) : null;
@@ -161,14 +168,19 @@ export async function dbGet<T>(path: string): Promise<T | null> {
 
 /** Replaces a node. Throws on failure. */
 export async function dbSet<T>(path: string, value: T): Promise<void> {
-  const p = normalizePath(path);
+  const p = nonRootPath(path);
   await withTimeout('SET', p, () => getDb().ref(p).set(value));
 }
 
-/** Multi-path / partial update relative to `path`. Atomic. Throws on failure. */
+/**
+ * Multi-path / partial update relative to `path` ("" = database root). Atomic.
+ * Throws on failure. An empty update is a no-op.
+ */
 export async function dbUpdate(path: string, values: Record<string, unknown>): Promise<void> {
   const p = normalizePath(path);
-  await withTimeout('UPDATE', p, () => getDb().ref(p).update(values));
+  if (Object.keys(values).length === 0) return;
+  // The SDK rejects ref(""); the root reference is ref() with no argument.
+  await withTimeout('UPDATE', p || '/', () => (p ? getDb().ref(p) : getDb().ref()).update(values));
 }
 
 /**
@@ -180,7 +192,7 @@ export async function dbTransaction<T>(
   path: string,
   update: (current: T | null) => T | null | undefined
 ): Promise<{ committed: boolean; value: T | null }> {
-  const p = normalizePath(path);
+  const p = nonRootPath(path);
   return withTimeout('TRANSACTION', p, async () => {
     const result = await getDb()
       .ref(p)
@@ -191,6 +203,6 @@ export async function dbTransaction<T>(
 
 /** Deletes a node. Throws on failure. */
 export async function dbRemove(path: string): Promise<void> {
-  const p = normalizePath(path);
+  const p = nonRootPath(path);
   await withTimeout('REMOVE', p, () => getDb().ref(p).remove());
 }

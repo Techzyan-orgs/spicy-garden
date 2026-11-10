@@ -80,35 +80,14 @@ export default function BillModal({ order, isOpen, onClose }: BillModalProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  if (!isOpen || !order) return null;
-
-  const rawItems: BillOrderItem[] = Array.isArray(order.items) ? order.items : [];
-  const grandTotal = Number(order.total) || 0;
-  
-  // Tax breakdown (All-inclusive GST 5% = 2.5% CGST + 2.5% SGST)
-  const taxableSubtotal = Math.round((grandTotal / 1.05) * 100) / 100;
-  const totalGst = Math.round((grandTotal - taxableSubtotal) * 100) / 100;
-  const halfGst = Math.round((totalGst / 2) * 100) / 100;
-
-  const dateObj = order.created_at ? new Date(order.created_at) : new Date();
-  const formattedDate = dateObj.toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
-  const formattedTime = dateObj.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
-
-  const orderNumStr = String(order.order_number).padStart(4, '0');
-
-  // Direct UPI Payment Link & QR Code
-  const upiUrl = buildUpiPaymentUrl(grandTotal, `Bill SG-${orderNumStr}`);
+  // All hooks run on every render (before the early return below) — React requires a stable hook order.
+  const hookTotal = Number(order?.total) || 0;
+  const hookOrderNum = order ? String(order.order_number).padStart(4, '0') : '';
+  const upiUrl = isOpen && order ? buildUpiPaymentUrl(hookTotal, `Bill SG-${hookOrderNum}`) : null;
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
 
   useEffect(() => {
+    setQrCodeUrl(''); // never show the previous bill's QR code
     if (upiUrl) {
       generateQrDataUrl(upiUrl, 130).then((dataUrl) => {
         if (dataUrl) setQrCodeUrl(dataUrl);
@@ -136,6 +115,30 @@ export default function BillModal({ order, isOpen, onClose }: BillModalProps) {
 
   // Track backdrop pointer down to prevent closing when dragging/selecting text from inside the bill receipt
   const isBackdropMouseDownRef = useRef(false);
+
+  if (!isOpen || !order) return null;
+
+  const rawItems: BillOrderItem[] = Array.isArray(order.items) ? order.items : [];
+  const grandTotal = Number(order.total) || 0;
+  
+  // Tax breakdown (All-inclusive GST 5% = 2.5% CGST + 2.5% SGST)
+  const taxableSubtotal = Math.round((grandTotal / 1.05) * 100) / 100;
+  const totalGst = Math.round((grandTotal - taxableSubtotal) * 100) / 100;
+  const halfGst = Math.round((totalGst / 2) * 100) / 100;
+
+  const dateObj = order.created_at ? new Date(order.created_at) : new Date();
+  const formattedDate = dateObj.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+  const formattedTime = dateObj.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const orderNumStr = hookOrderNum;
 
   const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     isBackdropMouseDownRef.current = e.target === e.currentTarget;

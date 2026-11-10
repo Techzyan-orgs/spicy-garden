@@ -86,17 +86,4 @@ export function decryptSensitiveData(encryptedPayload: string): string {
   throw new DecryptionError('Unable to decrypt value with any configured key.');
 }
 
-/**
- * Masks phone number for display safety in the Admin UI (e.g. "98****3210")
- */
-export function maskPhoneNumber(phone: string): string {
-  if (!phone) return '';
-  const clean = phone.replace(/\D/g, '');
-  if (clean.length === 10) {
-    return `${clean.slice(0, 2)}****${clean.slice(6)}`;
-  }
-  if (clean.length > 4) {
-    return `${clean.slice(0, 2)}****${clean.slice(-2)}`;
-  }
-  return '******';
-}
+export { maskPhoneNumber } from './maskPhone';

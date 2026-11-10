@@ -148,3 +148,29 @@ export async function sendWhatsAppTemplateMessage(
     return { success: false, error: err?.message || 'Network error communicating with WhatsApp API.' };
   }
 }
+
+/** Builds the body-parameter component for a template with {{1}}, {{2}}, … placeholders. */
+export function templateBodyParams(values: string[]): any[] {
+  return [
+    {
+      type: 'body',
+      parameters: values.map((text) => ({ type: 'text', text: String(text).slice(0, 1000) })),
+    },
+  ];
+}
+
+/**
+ * Transactional order / reservation confirmations.
+ *
+ * WhatsApp only delivers free-text messages inside the 24-hour customer-service
+ * window, so confirmations use pre-approved templates configured by env:
+ *   WHATSAPP_ORDER_TEMPLATE        body: {{1}} customer name, {{2}} order ref, {{3}} total
+ *   WHATSAPP_RESERVATION_TEMPLATE  body: {{1}} customer name, {{2}} booking ref, {{3}} booking details
+ *   WHATSAPP_TEMPLATE_LANGUAGE     language code (default "en")
+ * When the relevant template is not configured, no message is sent.
+ */
+export function getConfirmationTemplate(kind: 'order' | 'reservation'): { name: string; language: string } | null {
+  const name = (kind === 'order' ? process.env.WHATSAPP_ORDER_TEMPLATE : process.env.WHATSAPP_RESERVATION_TEMPLATE)?.trim();
+  if (!name || !isWhatsAppConfigured()) return null;
+  return { name, language: process.env.WHATSAPP_TEMPLATE_LANGUAGE?.trim() || 'en' };
+}

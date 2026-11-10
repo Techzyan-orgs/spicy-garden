@@ -31,6 +31,7 @@ import {
 import { generateQrDataUrl } from '@/lib/qrCode';
 import { RESTAURANT_UPI_ID, isUpiConfigured, buildUpiPaymentUrl } from '@/lib/publicConfig';
 import { useCafeOperations } from '@/context/CafeOperationsContext';
+import { WHATSAPP_CONSENT_TEXT } from '@/lib/consentText';
 
 interface OrderModalProps {
   onClose: () => void;
@@ -97,6 +98,8 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
   const [paymentMode, setPaymentMode] = useState<'cash' | 'upi'>('cash');
   const [upiConfirmed, setUpiConfirmed] = useState(false);
   const [upiRefId, setUpiRefId] = useState('');
+  // WhatsApp offers opt-in: always starts unticked; never pre-selected.
+  const [whatsappOptIn, setWhatsappOptIn] = useState(false);
   const [copiedUpi, setCopiedUpi] = useState(false);
 
   // Restore saved details from localStorage for returning customers (excluding phone and orders, which are NOT kept in local storage)
@@ -363,6 +366,7 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
           paymentStatus: resolvedPaymentStatus,
           paymentMode: paymentMode,
           upiTransactionId: cleanUpiRef || undefined,
+          whatsappOptIn,
         }),
       });
 
@@ -925,6 +929,16 @@ export default function OrderModal({ onClose, item, preference }: OrderModalProp
                   </div>
                 </div>
               </div>
+
+              <label className="flex items-start gap-2 px-1 text-[11px] text-gray-600 dark:text-gray-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={whatsappOptIn}
+                  onChange={(e) => setWhatsappOptIn(e.target.checked)}
+                  className="mt-0.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>{WHATSAPP_CONSENT_TEXT} (Optional)</span>
+              </label>
 
               {/* Delivery Address & Location Section */}
               {orderType === 'delivery' ? (

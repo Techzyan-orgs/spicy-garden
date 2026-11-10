@@ -1,34 +1,50 @@
-import fs from 'fs';
-import path from 'path';
+/**
+ * WhatsApp marketing subscribers — Firebase RTDB only (no local files).
+ *
+ * Layout:
+ *   subscribers/{id}                 encrypted record (phone + name AES-256-GCM)
+ *   subscribers_by_hash/{hmac}       → id   (HMAC-SHA256(PHONE_HASH_KEY, phone))
+ *
+ * Every write is per-record (atomic multi-path update) and throws on failure.
+ * Records are only created with explicit, recorded consent; unsubscribing
+ * deletes the record.
+ *
+ * Legacy compatibility (until scripts/migrate-subscribers.mjs has run):
+ * records may still carry an unsalted SHA-256 `phoneHash`, and a duplicate
+ * copy may exist under whatsapp_subscribers/{sha256}. Lookups fall back to a
+ * scan matching either hash; writes upgrade the record and delete the copy.
+ *
+ * Node runtime only.
+ */
 import crypto from 'crypto';
 import { encryptSensitiveData, decryptSensitiveData } from './crypto';
 import { formatWhatsAppPhoneNumber } from './whatsapp';
-// TODO(Phase 5): rewrite this store (Firebase only, per-record writes, HMAC phone index).
-import {
-  dbGet as getFirebaseData,
-  dbSet as setFirebaseData,
-  dbUpdate as updateFirebaseData,
-  dbRemove as deleteFirebaseData,
-  isFirebaseConfigured,
-} from '@/lib/firebaseAdmin';
+import { dbGet, dbUpdate } from './firebaseAdmin';
+import { getPhoneHashKey } from './env';
+import { WHATSAPP_CONSENT_TEXT, WHATSAPP_CONSENT_VERSION } from './consentText';
 
 export interface StoredSubscriberRecord {
   id: string;
   phoneEncrypted: string;
-  phoneHash: string; // SHA-256 of 10-digit phone for O(1) deduplication without decrypting
+  /** HMAC-SHA256 of the 10-digit phone (legacy records: unsalted SHA-256). */
+  phoneHash: string;
   nameEncrypted?: string;
-  // Legacy optional fields for backward-compatibility migration during read
-  phone?: string;
-  formattedPhone?: string;
-  customerName?: string;
   source: string;
   interestScore?: number;
   consentGiven: boolean;
+  consentAt?: string;
+  consentSource?: string;
+  consentVersion?: string;
+  consentText?: string;
   createdAt: string;
   updatedAt: string;
   lastMessageSentAt?: string;
   lastMessageStatus?: 'delivered' | 'sent' | 'failed' | 'pending';
   lastCampaignName?: string;
+  // Legacy cleartext fields (stripped on any write)
+  phone?: string;
+  formattedPhone?: string;
+  customerName?: string;
 }
 
 export interface DecryptedSubscriber {
@@ -39,6 +55,8 @@ export interface DecryptedSubscriber {
   source: string;
   interestScore?: number;
   consentGiven: boolean;
+  consentAt?: string;
+  consentVersion?: string;
   createdAt: string;
   updatedAt: string;
   lastMessageSentAt?: string;
@@ -46,13 +64,29 @@ export interface DecryptedSubscriber {
   lastCampaignName?: string;
 }
 
-const SUBSCRIBERS_FILE_PATH = path.join(process.cwd(), 'src', 'data', 'whatsapp_subscribers.json');
+const CACHE_TTL_MS = 10_000;
+let cache: { records: StoredSubscriberRecord[]; at: number } | null = null;
 
-// In-memory cache for fast lookups
-let cachedSubscribers: StoredSubscriberRecord[] = [];
-let isStoreInitialized = false;
+function invalidateCache() {
+  cache = null;
+}
 
-function safeDecrypt(value: string): string {
+export function normalizeSubscriberPhone(phone: string): string {
+  return String(phone ?? '').replace(/\D/g, '').slice(-10);
+}
+
+/** Keyed, non-reversible phone index key. */
+export function phoneHmac(phone: string): string {
+  return crypto.createHmac('sha256', getPhoneHashKey()).update(normalizeSubscriberPhone(phone)).digest('hex');
+}
+
+/** Legacy unsalted hash, used only to find and clean up pre-migration records. */
+function legacyPhoneHash(phone: string): string {
+  return crypto.createHash('sha256').update(normalizeSubscriberPhone(phone)).digest('hex');
+}
+
+function safeDecrypt(value: string | undefined): string {
+  if (!value) return '';
   try {
     return decryptSensitiveData(value);
   } catch {
@@ -60,334 +94,166 @@ function safeDecrypt(value: string): string {
   }
 }
 
-function hashPhone(phone: string): string {
-  const clean = phone.replace(/\D/g, '').slice(-10);
-  return crypto.createHash('sha256').update(clean).digest('hex');
+function isRecord(r: unknown): r is StoredSubscriberRecord {
+  return Boolean(r && typeof r === 'object' && typeof (r as StoredSubscriberRecord).id === 'string');
 }
 
-function readLocalFallback(): StoredSubscriberRecord[] {
-  try {
-    if (fs.existsSync(SUBSCRIBERS_FILE_PATH)) {
-      const content = fs.readFileSync(SUBSCRIBERS_FILE_PATH, 'utf-8');
-      const parsed = JSON.parse(content || '[]');
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    }
-  } catch (err) {
-    console.warn('[WhatsAppStore] Error reading local subscriber file:', err);
-  }
-  return [];
-}
-
-let lastReadTime = 0;
-const CACHE_TTL_MS = 10000;
-
+/** All stored (encrypted) records. Throws DataUnavailableError when the database cannot be read. */
 export async function readStoredSubscribers(forceFresh = false): Promise<StoredSubscriberRecord[]> {
-  const now = Date.now();
-  if (!forceFresh && isStoreInitialized && cachedSubscribers.length > 0 && now - lastReadTime < CACHE_TTL_MS) {
-    return cachedSubscribers;
-  }
-
-  // 1. Fetch from Firebase Realtime Database
-  if (isFirebaseConfigured()) {
-    try {
-      const remote = await getFirebaseData<any>('subscribers');
-      if (remote) {
-        const rawRecords: any[] = Array.isArray(remote)
-          ? remote
-          : Object.values(remote);
-        const records: StoredSubscriberRecord[] = rawRecords.filter(
-          (r): r is StoredSubscriberRecord => Boolean(r && typeof r === 'object' && r.id)
-        );
-        cachedSubscribers = records;
-        isStoreInitialized = true;
-        lastReadTime = now;
-        return records;
-      }
-    } catch (fbErr) {
-      console.warn('[WhatsAppStore] Firebase fetch warning:', fbErr);
-    }
-  }
-
-  // 2. Fallback to local file or memory
-  const local = readLocalFallback().filter(
-    (r): r is StoredSubscriberRecord => Boolean(r && typeof r === 'object' && r.id)
-  );
-  cachedSubscribers = local;
-  isStoreInitialized = true;
-  lastReadTime = now;
-  return local;
+  if (!forceFresh && cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.records;
+  const remote = await dbGet<Record<string, unknown> | unknown[]>('subscribers');
+  const raw = remote ? (Array.isArray(remote) ? remote : Object.values(remote)) : [];
+  const records = raw.filter(isRecord).sort((a, b) => a.id.localeCompare(b.id));
+  cache = { records, at: Date.now() };
+  return records;
 }
 
-export function readStoredSubscribersSync(): StoredSubscriberRecord[] {
-  if (isStoreInitialized && cachedSubscribers.length > 0) {
-    return cachedSubscribers;
+async function findByPhone(phone: string): Promise<StoredSubscriberRecord | null> {
+  const hmac = phoneHmac(phone);
+  const indexedId = await dbGet<string>(`subscribers_by_hash/${hmac}`);
+  if (typeof indexedId === 'string') {
+    const rec = await dbGet<StoredSubscriberRecord>(`subscribers/${indexedId}`);
+    if (isRecord(rec)) return rec;
   }
-  const local = readLocalFallback().filter(
-    (r): r is StoredSubscriberRecord => Boolean(r && typeof r === 'object' && r.id)
-  );
-  cachedSubscribers = local;
-  isStoreInitialized = true;
-  return local;
+  // Fallback for records not yet migrated to the HMAC index.
+  const legacy = legacyPhoneHash(phone);
+  const all = await readStoredSubscribers(true);
+  return all.find((r) => r.phoneHash === hmac || r.phoneHash === legacy) ?? null;
 }
 
-export async function writeStoredSubscribers(records: StoredSubscriberRecord[]): Promise<void> {
-  const sanitizedRecords = records
-    .filter((r): r is StoredSubscriberRecord => Boolean(r && typeof r === 'object' && r.id))
-    .map((r) => {
-      // Strictly strip any cleartext phone numbers or customer names before storing
-      const cleaned = { ...r };
-      delete cleaned.phone;
-      delete cleaned.formattedPhone;
-      delete cleaned.customerName;
-      return cleaned;
-    });
+function toDecrypted(r: StoredSubscriberRecord, phoneHint?: string, nameHint?: string): DecryptedSubscriber {
+  const phone = phoneHint || safeDecrypt(r.phoneEncrypted) || r.phone || '';
+  return {
+    id: r.id,
+    phone,
+    formattedPhone: phone ? formatWhatsAppPhoneNumber(phone) : '',
+    customerName: nameHint || safeDecrypt(r.nameEncrypted) || r.customerName || '',
+    source: r.source,
+    interestScore: r.interestScore,
+    consentGiven: r.consentGiven,
+    consentAt: r.consentAt,
+    consentVersion: r.consentVersion,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    lastMessageSentAt: r.lastMessageSentAt,
+    lastMessageStatus: r.lastMessageStatus,
+    lastCampaignName: r.lastCampaignName,
+  };
+}
 
-  cachedSubscribers = sanitizedRecords;
-  isStoreInitialized = true;
-
-  // 1. Persist to Firebase Realtime Database
-  if (isFirebaseConfigured()) {
-    const recordsMap: Record<string, StoredSubscriberRecord> = {};
-    for (const r of sanitizedRecords) {
-      recordsMap[r.id] = r;
-    }
-    // Throws on failure so callers never report a save that did not happen.
-    await setFirebaseData('subscribers', recordsMap);
-  }
-
-  // 2. Best-effort local file write for dev (skipped on serverless production)
-  if (process.env.NODE_ENV !== 'production') {
-    try {
-      const dir = path.dirname(SUBSCRIBERS_FILE_PATH);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(SUBSCRIBERS_FILE_PATH, JSON.stringify(sanitizedRecords, null, 2), 'utf-8');
-    } catch (err) {
-      // Expected on read-only environments
-    }
-  }
+export interface ConsentEvidence {
+  /** Where the customer opted in, e.g. "order_checkout", "behavioral_interest_prompt", "admin_manual". */
+  source: string;
+  /** Wording shown to the customer; defaults to the current standard text. */
+  text?: string;
+  version?: string;
 }
 
 /**
- * Adds or updates a subscriber with AES-256 encrypted PII storage and deduplication.
- * NEVER writes raw cleartext phone numbers or customer names to Firebase or disk.
+ * Adds or updates a subscriber. Requires explicit consent evidence, which is
+ * stored with the record. Never writes cleartext phone numbers or names.
  */
 export async function addOrUpdateSubscriber(params: {
   phone: string;
   customerName?: string;
   source?: string;
   interestScore?: number;
+  consent: ConsentEvidence;
 }): Promise<DecryptedSubscriber> {
-  const cleanPhone = params.phone.replace(/\D/g, '').slice(-10);
-  const pHash = hashPhone(cleanPhone);
-  const existingRecords = await readStoredSubscribers(true);
-
-  const existingIndex = existingRecords.findIndex((r) => r.phoneHash === pHash);
+  const cleanPhone = normalizeSubscriberPhone(params.phone);
+  const hmac = phoneHmac(cleanPhone);
+  const existing = await findByPhone(cleanPhone);
   const now = new Date().toISOString();
+  const name = params.customerName?.trim().slice(0, 100) || '';
 
-  let targetRecord: StoredSubscriberRecord;
-
-  if (existingIndex >= 0) {
-    const prev = existingRecords[existingIndex];
-    targetRecord = {
-      ...prev,
-      phoneEncrypted: encryptSensitiveData(cleanPhone),
-      phoneHash: pHash,
-      nameEncrypted: params.customerName
-        ? encryptSensitiveData(params.customerName.trim())
-        : prev.nameEncrypted,
-      updatedAt: now,
-      source: params.source || prev.source,
-      interestScore: Math.max(prev.interestScore || 0, params.interestScore || 0),
-    };
-    // Strip cleartext fields from legacy records
-    delete targetRecord.phone;
-    delete targetRecord.formattedPhone;
-    delete targetRecord.customerName;
-    existingRecords[existingIndex] = targetRecord;
-  } else {
-    targetRecord = {
-      id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      phoneEncrypted: encryptSensitiveData(cleanPhone),
-      phoneHash: pHash,
-      nameEncrypted: params.customerName ? encryptSensitiveData(params.customerName.trim()) : undefined,
-      source: params.source || 'website_consent_prompt',
-      interestScore: params.interestScore || 0,
-      consentGiven: true,
-      createdAt: now,
-      updatedAt: now,
-    };
-    existingRecords.unshift(targetRecord);
-  }
-
-  // 1. Persist strictly encrypted records to Firebase RTDB
-  if (isFirebaseConfigured()) {
-    try {
-      await setFirebaseData(`subscribers/${targetRecord.id}`, targetRecord);
-      // Index by one-way SHA-256 hash (never cleartext phone) for fast deduplication lookup
-      await setFirebaseData(`whatsapp_subscribers/${pHash}`, {
-        id: targetRecord.id,
-        phoneHash: pHash,
-        phoneEncrypted: targetRecord.phoneEncrypted,
-        nameEncrypted: targetRecord.nameEncrypted,
-        source: targetRecord.source,
-        interestScore: targetRecord.interestScore,
-        consentGiven: true,
-        updatedAt: now,
-      });
-      // Purge any legacy unencrypted cleartext path if it existed
-      deleteFirebaseData(`whatsapp_subscribers/${cleanPhone}`).catch(() => {});
-    } catch (fbErr) {
-      console.warn('[WhatsAppStore] Failed to write subscriber to Firebase RTDB:', fbErr);
-    }
-  }
-
-  // 2. Cache and sanitized local write
-  cachedSubscribers = existingRecords;
-  isStoreInitialized = true;
-  lastReadTime = Date.now();
-  if (process.env.NODE_ENV !== 'production') {
-    try {
-      const dir = path.dirname(SUBSCRIBERS_FILE_PATH);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(SUBSCRIBERS_FILE_PATH, JSON.stringify(existingRecords, null, 2), 'utf-8');
-    } catch {}
-  }
-
-  const decrypted: DecryptedSubscriber = {
-    id: targetRecord.id,
-    phone: cleanPhone,
-    formattedPhone: formatWhatsAppPhoneNumber(cleanPhone),
-    customerName: params.customerName?.trim() || (targetRecord.nameEncrypted ? safeDecrypt(targetRecord.nameEncrypted) : ''),
-    source: targetRecord.source,
-    interestScore: targetRecord.interestScore,
+  const record: StoredSubscriberRecord = {
+    ...(existing ?? {}),
+    id: existing?.id ?? `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+    phoneEncrypted: encryptSensitiveData(cleanPhone),
+    phoneHash: hmac,
+    nameEncrypted: name ? encryptSensitiveData(name) : existing?.nameEncrypted,
+    source: params.source || existing?.source || params.consent.source,
+    interestScore: Math.max(existing?.interestScore || 0, params.interestScore || 0),
     consentGiven: true,
-    createdAt: targetRecord.createdAt,
-    updatedAt: targetRecord.updatedAt,
-    lastMessageSentAt: targetRecord.lastMessageSentAt,
-    lastMessageStatus: targetRecord.lastMessageStatus,
-    lastCampaignName: targetRecord.lastCampaignName,
+    consentAt: now,
+    consentSource: params.consent.source,
+    consentVersion: params.consent.version || WHATSAPP_CONSENT_VERSION,
+    consentText: params.consent.text || WHATSAPP_CONSENT_TEXT,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
   };
+  delete record.phone;
+  delete record.formattedPhone;
+  delete record.customerName;
+  // RTDB rejects undefined values
+  const clean = JSON.parse(JSON.stringify(record)) as StoredSubscriberRecord;
 
-  return decrypted;
+  const updates: Record<string, unknown> = {
+    [`subscribers/${clean.id}`]: clean,
+    [`subscribers_by_hash/${hmac}`]: clean.id,
+    // Remove the legacy duplicate copy (unsalted hash / cleartext key), if any.
+    [`whatsapp_subscribers/${legacyPhoneHash(cleanPhone)}`]: null,
+    [`whatsapp_subscribers/${cleanPhone}`]: null,
+  };
+  await dbUpdate('', updates);
+  invalidateCache();
+
+  return toDecrypted(clean, cleanPhone, name || undefined);
 }
 
-/**
- * Returns all subscribers with sensitive PII decrypted.
- * ONLY callable by authenticated Owner sessions.
- */
+/** Deletes a subscriber record and all its index entries. */
+async function removeRecord(rec: StoredSubscriberRecord): Promise<void> {
+  const phone = safeDecrypt(rec.phoneEncrypted) || rec.phone || '';
+  const updates: Record<string, unknown> = { [`subscribers/${rec.id}`]: null };
+  if (rec.phoneHash) {
+    updates[`subscribers_by_hash/${rec.phoneHash}`] = null;
+    updates[`whatsapp_subscribers/${rec.phoneHash}`] = null;
+  }
+  if (phone) {
+    updates[`subscribers_by_hash/${phoneHmac(phone)}`] = null;
+    updates[`whatsapp_subscribers/${legacyPhoneHash(phone)}`] = null;
+    updates[`whatsapp_subscribers/${normalizeSubscriberPhone(phone)}`] = null;
+  }
+  await dbUpdate('', updates);
+  invalidateCache();
+}
+
+/** Owner action: delete by subscriber id. Returns false when not found. */
+export async function deleteSubscriber(id: string): Promise<boolean> {
+  const rec = await dbGet<StoredSubscriberRecord>(`subscribers/${id}`);
+  if (!isRecord(rec)) return false;
+  await removeRecord(rec);
+  return true;
+}
+
+/** Customer opt-out by phone number. Returns false when the number was not subscribed. */
+export async function unsubscribeByPhone(phone: string): Promise<boolean> {
+  const rec = await findByPhone(phone);
+  if (!rec) return false;
+  await removeRecord(rec);
+  return true;
+}
+
+/** All subscribers with PII decrypted. Owner-only callers. */
 export async function getAllSubscribersDecrypted(): Promise<DecryptedSubscriber[]> {
   const records = await readStoredSubscribers();
-  return records.map((r) => {
-    let rawPhone = '';
-    if (r.phoneEncrypted) {
-      try {
-        rawPhone = decryptSensitiveData(r.phoneEncrypted);
-      } catch {}
-    } else if (r.phone) {
-      rawPhone = r.phone;
-    }
-
-    let rawName = '';
-    if (r.nameEncrypted) {
-      try {
-        rawName = decryptSensitiveData(r.nameEncrypted);
-      } catch {}
-    } else if (r.customerName) {
-      rawName = r.customerName;
-    }
-
-    return {
-      id: r.id,
-      phone: rawPhone,
-      formattedPhone: rawPhone ? formatWhatsAppPhoneNumber(rawPhone) : '',
-      customerName: rawName,
-      source: r.source,
-      interestScore: r.interestScore,
-      consentGiven: r.consentGiven,
-      createdAt: r.createdAt,
-      updatedAt: r.updatedAt,
-      lastMessageSentAt: r.lastMessageSentAt,
-      lastMessageStatus: r.lastMessageStatus,
-      lastCampaignName: r.lastCampaignName,
-    };
-  });
+  return records.map((r) => toDecrypted(r));
 }
 
-/**
- * Updates campaign dispatch results on subscriber records
- */
+/** Records campaign results on the given subscribers (one atomic update). */
 export async function updateCampaignDispatchStatus(
   subscriberIds: string[],
   campaignName: string,
   status: 'sent' | 'failed'
 ): Promise<void> {
-  const records = await readStoredSubscribers(true);
-  const idSet = new Set(subscriberIds);
+  if (subscriberIds.length === 0) return;
   const now = new Date().toISOString();
-
-  let modified = false;
-  for (const r of records) {
-    if (idSet.has(r.id)) {
-      r.lastMessageSentAt = now;
-      r.lastMessageStatus = status;
-      r.lastCampaignName = campaignName;
-      modified = true;
-      if (isFirebaseConfigured()) {
-        updateFirebaseData(`subscribers/${r.id}`, {
-          lastMessageSentAt: now,
-          lastMessageStatus: status,
-          lastCampaignName: campaignName,
-        }).catch(() => {});
-      }
-    }
+  const updates: Record<string, unknown> = {};
+  for (const id of subscriberIds) {
+    updates[`subscribers/${id}/lastMessageSentAt`] = now;
+    updates[`subscribers/${id}/lastMessageStatus`] = status;
+    updates[`subscribers/${id}/lastCampaignName`] = campaignName.slice(0, 120);
   }
-
-  if (modified) {
-    cachedSubscribers = records;
-    if (process.env.NODE_ENV !== 'production') {
-      try {
-        fs.writeFileSync(SUBSCRIBERS_FILE_PATH, JSON.stringify(records, null, 2), 'utf-8');
-      } catch {}
-    }
-  }
-}
-
-/**
- * Deletes a subscriber by ID
- */
-export async function deleteSubscriber(id: string): Promise<boolean> {
-  const records = await readStoredSubscribers(true);
-  const target = records.find((r) => r.id === id);
-  const filtered = records.filter((r) => r.id !== id);
-  if (filtered.length !== records.length) {
-    cachedSubscribers = filtered;
-    if (isFirebaseConfigured()) {
-      try {
-        await deleteFirebaseData(`subscribers/${id}`);
-        if (target?.phoneHash) {
-          await deleteFirebaseData(`whatsapp_subscribers/${target.phoneHash}`);
-        }
-        // Purge legacy path if applicable
-        const legacyPhone = target?.phone || (target?.phoneEncrypted ? decryptSensitiveData(target.phoneEncrypted) : null);
-        if (legacyPhone) {
-          await deleteFirebaseData(`whatsapp_subscribers/${legacyPhone}`);
-        }
-      } catch (err) {
-        console.warn('[WhatsAppStore] Firebase delete error:', err);
-      }
-    }
-    if (process.env.NODE_ENV !== 'production') {
-      try {
-        fs.writeFileSync(SUBSCRIBERS_FILE_PATH, JSON.stringify(filtered, null, 2), 'utf-8');
-      } catch {}
-    }
-    return true;
-  }
-  return false;
+  await dbUpdate('', updates);
+  invalidateCache();
 }

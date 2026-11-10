@@ -1,179 +1,158 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/apiGuard';
-import {
-  getAllSubscribersDecrypted,
-  updateCampaignDispatchStatus,
-} from '@/lib/whatsappStore';
+import { z } from 'zod';
+import { jsonError, parseBody, requireAdmin } from '@/lib/apiGuard';
+import { storeErrorResponse } from '@/lib/apiErrors';
+import { getAllSubscribersDecrypted, updateCampaignDispatchStatus } from '@/lib/whatsappStore';
 import {
   sendWhatsAppTextMessage,
   sendWhatsAppTemplateMessage,
   isWhatsAppConfigured,
-  formatWhatsAppPhoneNumber,
+  templateBodyParams,
 } from '@/lib/whatsapp';
+import { INDIAN_MOBILE, normalizePhone } from '@/lib/schemas';
+import { UNSUBSCRIBE_PATH } from '@/lib/consentText';
 
 export const runtime = 'nodejs';
-
 export const dynamic = 'force-dynamic';
 
+/**
+ * POST /api/admin/whatsapp/broadcast
+ *
+ * Sends ONE batch (≤ 50 recipients) per request so a large list never runs
+ * into the serverless time limit. The admin UI calls repeatedly with the
+ * returned `nextCursor` until it is null.
+ *
+ * mode "template" (recommended): an approved Meta template; delivered to
+ *   anyone who opted in.
+ * mode "text": free text; WhatsApp only delivers it to customers who messaged
+ *   you in the last 24 hours. An unsubscribe link is appended.
+ */
+const MAX_BATCH = 50;
+const PARALLEL = 5;
+
+const broadcastSchema = z
+  .object({
+    campaignTitle: z.string().trim().max(120).optional(),
+    mode: z.enum(['template', 'text']).default('template'),
+    messageText: z.string().trim().max(4000).optional(),
+    templateName: z
+      .string()
+      .trim()
+      .regex(/^[a-z0-9_]{1,512}$/, 'template names use lowercase letters, digits and _')
+      .optional(),
+    templateLanguage: z
+      .string()
+      .trim()
+      .regex(/^[a-z]{2,3}(_[A-Z]{2})?$/, 'e.g. en or en_US')
+      .default('en'),
+    templateParams: z.array(z.string().max(1000)).max(10).default([]),
+    target: z.enum(['test', 'all']),
+    testPhone: z.string().max(20).optional(),
+    cursor: z.number().int().min(0).default(0),
+    batchSize: z.number().int().min(1).max(MAX_BATCH).default(MAX_BATCH),
+  })
+  .refine((b) => (b.mode === 'template' ? Boolean(b.templateName) : Boolean(b.messageText)), {
+    message: 'Provide an approved template name (template mode) or message text (text mode).',
+  });
+
+function maskPhone(phone: string | undefined): string {
+  const p = String(phone ?? '');
+  return p.length >= 4 ? `******${p.slice(-4)}` : '******';
+}
 
 export async function POST(req: NextRequest) {
   const denied = await requireAdmin(req);
   if (denied) return denied;
 
+  const parsed = await parseBody(req, broadcastSchema);
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.data;
+
+  if (!isWhatsAppConfigured()) {
+    return jsonError(400, 'WhatsApp Business API is not configured (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID).', {
+      isConfigured: false,
+    });
+  }
+
+  const origin = req.nextUrl.origin;
+  const send = (phone: string) =>
+    b.mode === 'template'
+      ? sendWhatsAppTemplateMessage(
+          phone,
+          b.templateName!,
+          b.templateLanguage,
+          b.templateParams.length ? templateBodyParams(b.templateParams) : []
+        )
+      : sendWhatsAppTextMessage(phone, `${b.messageText}\n\nTo stop these messages: ${origin}${UNSUBSCRIBE_PATH}`);
+
+  const campaign = (b.campaignTitle || b.templateName || 'WhatsApp broadcast').slice(0, 120);
+
   try {
-    const body = await req.json();
-    const {
-      campaignTitle,
-      messageText,
-      target,
-      testPhone,
-      templateName,
-      templateLanguage,
-      templateComponents,
-    } = body;
-
-    if (!templateName && (!messageText || !messageText.trim())) {
-      return NextResponse.json({ error: 'Message text or template name is required.' }, { status: 400 });
-    }
-
-    const campaign = (campaignTitle || templateName || 'General Promotional Broadcast').trim();
-
-    // 1. Single Test Preview Dispatch
-    if (target === 'test') {
-      const cleanTest = (testPhone || '').replace(/\D/g, '').slice(-10);
-      if (cleanTest.length < 10) {
-        return NextResponse.json(
-          { error: 'Valid 10-digit mobile number required for test preview.' },
-          { status: 400 }
-        );
-      }
-
-      if (!isWhatsAppConfigured()) {
-        return NextResponse.json(
-          {
-            error:
-              'WhatsApp Business API credentials (WHATSAPP_ACCESS_TOKEN & WHATSAPP_PHONE_NUMBER_ID) are not configured in environment variables.',
-            isConfigured: false,
-          },
-          { status: 400 }
-        );
-      }
-
-      const res = templateName
-        ? await sendWhatsAppTemplateMessage(
-            cleanTest,
-            templateName,
-            templateLanguage || 'en',
-            templateComponents || []
-          )
-        : await sendWhatsAppTextMessage(cleanTest, (messageText || '').trim());
-
+    // 1. Single test message
+    if (b.target === 'test') {
+      const phone = normalizePhone(b.testPhone);
+      if (!INDIAN_MOBILE.test(phone)) return jsonError(400, 'Valid 10-digit mobile number required for the test message.');
+      const res = await send(phone);
       if (!res.success) {
-        return NextResponse.json(
-          { error: res.error || 'Failed to dispatch test message via WhatsApp API.' },
-          { status: 502 }
-        );
+        console.warn('[Admin WhatsApp Broadcast] Test send failed:', res.error);
+        return jsonError(502, `WhatsApp did not accept the test message: ${String(res.error || 'unknown error').slice(0, 200)}`);
       }
-
-      return NextResponse.json({
-        success: true,
-        message: `Test preview successfully sent to +91 ${cleanTest}!`,
-        messageId: res.messageId,
-      });
+      return NextResponse.json({ success: true, message: `Test message sent to ${maskPhone(phone)}.` });
     }
 
-    // 2. Full Marketing Campaign Broadcast to All Opted-In Customers
+    // 2. One batch of the full list (stable order by subscriber id)
     const subscribers = await getAllSubscribersDecrypted();
-    if (subscribers.length === 0) {
-      return NextResponse.json(
-        { error: 'No opted-in WhatsApp subscribers found to broadcast to.' },
-        { status: 400 }
-      );
-    }
+    const total = subscribers.length;
+    if (total === 0) return jsonError(400, 'No opted-in WhatsApp subscribers to broadcast to.');
 
-    if (!isWhatsAppConfigured()) {
-      return NextResponse.json(
-        {
-          error:
-            'WhatsApp Business API is not configured. Please add WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID to your environment variables.',
-          isConfigured: false,
-        },
-        { status: 400 }
-      );
-    }
+    const batch = subscribers.slice(b.cursor, b.cursor + b.batchSize);
+    const sentIds: string[] = [];
+    const failedIds: string[] = [];
+    const errors: { phone: string; error: string }[] = [];
 
-    let sentCount = 0;
-    let failedCount = 0;
-    const successfulIds: string[] = [];
-    const dispatchErrors: { phone: string; error: string }[] = [];
-
-    // Process in parallel batches of 5 to respect Meta API rate limits while staying under serverless timeouts
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < subscribers.length; i += BATCH_SIZE) {
-      const batch = subscribers.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < batch.length; i += PARALLEL) {
       await Promise.all(
-        batch.map(async (sub) => {
-          if (!sub.phone || sub.phone.length < 10) {
-            failedCount++;
+        batch.slice(i, i + PARALLEL).map(async (sub) => {
+          if (!INDIAN_MOBILE.test(sub.phone)) {
+            failedIds.push(sub.id);
+            errors.push({ phone: maskPhone(sub.phone), error: 'Invalid or undecryptable number' });
             return;
           }
-
           try {
-            const sendResult = templateName
-              ? await sendWhatsAppTemplateMessage(
-                  sub.phone,
-                  templateName,
-                  templateLanguage || 'en',
-                  templateComponents || []
-                )
-              : await sendWhatsAppTextMessage(sub.phone, (messageText || '').trim());
-
-            if (sendResult.success) {
-              sentCount++;
-              successfulIds.push(sub.id);
+            const res = await send(sub.phone);
+            if (res.success) {
+              sentIds.push(sub.id);
             } else {
-              failedCount++;
-              dispatchErrors.push({ phone: maskPhone(sub.phone), error: 'Delivery failed' });
-              console.warn('[Admin WhatsApp Broadcast] Send failed:', sendResult.error);
+              failedIds.push(sub.id);
+              errors.push({ phone: maskPhone(sub.phone), error: 'Delivery failed' });
+              console.warn('[Admin WhatsApp Broadcast] Send failed:', res.error);
             }
-          } catch (err: any) {
-            failedCount++;
-            dispatchErrors.push({ phone: maskPhone(sub.phone), error: 'Delivery failed' });
-            console.warn('[Admin WhatsApp Broadcast] Send exception:', err?.message || err);
+          } catch (err) {
+            failedIds.push(sub.id);
+            errors.push({ phone: maskPhone(sub.phone), error: 'Delivery failed' });
+            console.warn('[Admin WhatsApp Broadcast] Send exception:', err instanceof Error ? err.message : err);
           }
         })
       );
-
-      // Brief pause between batches
-      if (i + BATCH_SIZE < subscribers.length) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
     }
 
-    // Record campaign status on successfully notified subscribers
-    if (successfulIds.length > 0) {
-      await updateCampaignDispatchStatus(successfulIds, campaign, 'sent');
-    }
+    await Promise.all([
+      updateCampaignDispatchStatus(sentIds, campaign, 'sent'),
+      updateCampaignDispatchStatus(failedIds, campaign, 'failed'),
+    ]);
 
+    const next = b.cursor + batch.length;
     return NextResponse.json({
       success: true,
-      totalSubscribers: subscribers.length,
-      sentCount,
-      failedCount,
+      total,
+      processed: next,
+      sentCount: sentIds.length,
+      failedCount: failedIds.length,
+      nextCursor: next < total ? next : null,
+      errors: errors.slice(0, 5),
       campaign,
-      errors: dispatchErrors.slice(0, 5), // Return first 5 errors if any
     });
-  } catch (err: any) {
-    console.error('[Admin WhatsApp Broadcast API] Unexpected error:', err);
-    return NextResponse.json(
-      { error: 'Broadcast campaign execution failed.' },
-      { status: 500 }
-    );
+  } catch (err) {
+    return storeErrorResponse(err, 'Admin WhatsApp Broadcast', 'Broadcast failed.');
   }
-}
-
-/** Never return full customer numbers in API responses. */
-function maskPhone(phone: string | undefined): string {
-  const p = String(phone ?? '');
-  return p.length >= 4 ? `******${p.slice(-4)}` : '******';
 }

@@ -69,22 +69,8 @@ function recordOrderHandled(orderId: string, orderNumber?: string | number) {
     const handled = getHandledOrderIds();
     if (orderId) handled.add(String(orderId));
     if (orderNumber) handled.add(String(orderNumber));
+    // Only order IDs/numbers are stored — never customer details.
     localStorage.setItem('sg_handled_order_ids', JSON.stringify(Array.from(handled).slice(-500)));
-
-    // 2. Clean up sg_orders_cache
-    const cachedStr = localStorage.getItem('sg_orders_cache');
-    if (cachedStr) {
-      const list = JSON.parse(cachedStr);
-      if (Array.isArray(list)) {
-        const cleaned = list.filter((o: any) => {
-          if (!o || !o.id) return false;
-          if (orderId && String(o.id) === String(orderId)) return false;
-          if (orderNumber && o.order_number && String(o.order_number) === String(orderNumber)) return false;
-          return true;
-        });
-        localStorage.setItem('sg_orders_cache', JSON.stringify(cleaned));
-      }
-    }
   } catch {}
 }
 
@@ -437,29 +423,12 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     if (isLoginPage) return;
 
-    // Hydrate immediately from persistent local cache, strictly excluding handled orders
+    // Full orders (names, phones, addresses) are never kept in browser storage; the
+    // pending list always comes from the server. Purge caches left by older builds.
     if (typeof window !== 'undefined') {
       try {
-        const handledIds = getHandledOrderIds();
-        const cached = localStorage.getItem('sg_orders_cache');
-        if (cached) {
-          const list = JSON.parse(cached);
-          if (Array.isArray(list) && list.length > 0) {
-            const validPending = list.filter((o: any) => {
-              if (!o || !o.id) return false;
-              if (handledIds.has(String(o.id))) return false;
-              if (o.order_number && handledIds.has(String(o.order_number))) return false;
-              return o.status === 'pending';
-            });
-
-            // Immediately purge any handled orders from local storage cache
-            localStorage.setItem('sg_orders_cache', JSON.stringify(validPending));
-
-            if (validPending.length > 0) {
-              setRecentOrders(validPending);
-            }
-          }
-        }
+        localStorage.removeItem('sg_orders_cache');
+        localStorage.removeItem('sg_last_order_event');
       } catch {}
     }
 
@@ -522,14 +491,7 @@ export function AudioAlertProvider({ children }: { children: React.ReactNode }) 
               }
             });
 
-            const finalOrders = Array.from(map.values());
-
-            // Synchronize sg_orders_cache with current active pending orders
-            try {
-              localStorage.setItem('sg_orders_cache', JSON.stringify(finalOrders));
-            } catch {}
-
-            return finalOrders;
+            return Array.from(map.values());
           });
         }
       } catch (e) {}

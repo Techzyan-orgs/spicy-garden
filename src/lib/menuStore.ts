@@ -242,15 +242,14 @@ async function assertKeyedFormat(): Promise<{ categories: Record<string, any>; i
 // ── Item writes ─────────────────────────────────────────────────────────────
 
 /**
- * Image URLs must be our own static assets ("/..."), our Cloudinary account, or
- * an inline raster image (legacy upload fallback). Anything else is rejected so
- * the menu cannot be used to hot-link or track visitors via third-party hosts.
+ * Image URLs must be our own static assets ("/...") or our Cloudinary account.
+ * Anything else (including inline data: URLs) is rejected so the menu cannot
+ * be used to hot-link or track visitors via third-party hosts.
  */
 function validateImageUrl(url: string | null, label: string) {
   if (url === null) return;
-  if (url.length > 2_000_000) throw new MenuValidationError(`${label} image is too large.`);
+  if (url.length > 2048) throw new MenuValidationError(`${label} image URL is too long.`);
   if (url.startsWith('/') && !url.startsWith('//') && !url.includes('..')) return;
-  if (/^data:image\/(png|jpeg|webp|gif|avif);base64,/.test(url)) return;
   const cloud = process.env.CLOUDINARY_CLOUD_NAME?.trim();
   if (cloud && url.startsWith(`https://res.cloudinary.com/${cloud}/`)) return;
   throw new MenuValidationError(`${label} image must be uploaded through the admin panel.`);
